@@ -305,8 +305,10 @@ export default function Compras({ shift }: ComprasProps) {
         }
       }
     } catch (error) {
+      let rollbackFailed = false;
+
       for (const processedProduct of processedProducts.slice().reverse()) {
-        await supabase
+        const { error: rollbackProductError } = await supabase
           .from('products')
           .update({
             stock: processedProduct.stock,
@@ -315,18 +317,35 @@ export default function Compras({ shift }: ComprasProps) {
             updated_at: new Date().toISOString(),
           })
           .eq('id', processedProduct.id);
+
+        if (rollbackProductError) {
+          rollbackFailed = true;
+          console.error('Error revirtiendo stock de producto:', rollbackProductError);
+        }
       }
 
       const purchaseProductIds = [...new Set(purchaseItems.map(item => item.product_id))];
-      await supabase
+      const { error: rollbackMovementError } = await supabase
         .from('inventory_movements')
         .delete()
         .eq('notes', `Compra ${invoiceNumber}`)
         .eq('supplier', supplier)
         .in('product_id', purchaseProductIds);
-      await supabase.from('purchase_invoices').delete().eq('id', invoiceData.id);
 
-      setErrorMessage(error instanceof Error ? error.message : 'Error al registrar la compra');
+      if (rollbackMovementError) {
+        rollbackFailed = true;
+        console.error('Error revirtiendo movimientos de inventario:', rollbackMovementError);
+      }
+
+      const { error: rollbackInvoiceError } = await supabase.from('purchase_invoices').delete().eq('id', invoiceData.id);
+
+      if (rollbackInvoiceError) {
+        rollbackFailed = true;
+        console.error('Error eliminando factura fallida:', rollbackInvoiceError);
+      }
+
+      const baseError = error instanceof Error ? error.message : 'Error al registrar la compra';
+      setErrorMessage(rollbackFailed ? `${baseError}. Revisá los datos porque la reversión fue parcial.` : baseError);
       return;
     }
 
