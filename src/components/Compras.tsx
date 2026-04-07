@@ -221,15 +221,29 @@ export default function Compras({ shift }: ComprasProps) {
       }))
     );
 
-    // Update cost, price and supplier for each product.
-    // Stock update and inventory_movements recording are handled automatically
-    // by the database trigger trg_update_stock_on_purchase on purchase_invoice_items.
+    // Update cost, price, supplier and stock for each product.
+    // We fetch the current stock value to compute the new total manually. This
+    // ensures that purchases immediately impact stock levels even if a
+    // database trigger is not present or fails to fire.
     for (const item of purchaseItems) {
-      await supabase.from('products').update({
-        cost: item.purchase_price,
-        price: item.sale_price,
-        supplier,
-      }).eq('id', item.product_id);
+      // Get the current stock for the product
+      const { data: productData } = await supabase
+        .from('products')
+        .select('stock')
+        .eq('id', item.product_id)
+        .single();
+      const currentStock = productData?.stock ?? 0;
+      const newStock = currentStock + item.quantity;
+      // Update cost, price, supplier and stock
+      await supabase
+        .from('products')
+        .update({
+          cost: item.purchase_price,
+          price: item.sale_price,
+          supplier,
+          stock: newStock,
+        })
+        .eq('id', item.product_id);
     }
 
     setPurchaseItems([]);
