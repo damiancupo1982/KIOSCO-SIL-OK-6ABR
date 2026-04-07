@@ -10,7 +10,16 @@ interface Product {
   cost: number;
   stock: number;
   category: string;
-  supplier: string;
+}
+
+interface CurrentUser {
+  full_name?: string;
+  name?: string;
+}
+
+interface ShiftInfo {
+  id: string;
+  user_name?: string;
 }
 
 interface PurchaseItem {
@@ -44,7 +53,7 @@ interface InvoiceDetail extends PurchaseInvoice {
 }
 
 interface ComprasProps {
-  shift: any;
+  shift: ShiftInfo | null;
 }
 
 export default function Compras({ shift }: ComprasProps) {
@@ -68,7 +77,7 @@ export default function Compras({ shift }: ComprasProps) {
   const [supplier, setSupplier] = useState('');
   const [showNewProductModal, setShowNewProductModal] = useState(false);
   const [newProductName, setNewProductName] = useState('');
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -94,7 +103,7 @@ export default function Compras({ shift }: ComprasProps) {
 
   const loadCurrentUser = () => {
     const stored = localStorage.getItem('currentUser');
-    if (stored) setCurrentUser(JSON.parse(stored));
+    if (stored) setCurrentUser(JSON.parse(stored) as CurrentUser);
   };
 
   const loadProducts = async () => {
@@ -114,9 +123,17 @@ export default function Compras({ shift }: ComprasProps) {
       .select('*, products(name)')
       .eq('invoice_id', invoiceId);
     if (invoice && items) {
+      const typedItems = items as Array<{
+        quantity: number;
+        purchase_price: number;
+        sale_price: number;
+        subtotal: number;
+        products?: { name?: string } | null;
+      }>;
+
       setSelectedInvoice({
         ...invoice,
-        items: items.map((i: any) => ({
+        items: typedItems.map((i) => ({
           product_name: i.products?.name || '',
           quantity: i.quantity,
           purchase_price: i.purchase_price,
@@ -154,7 +171,6 @@ export default function Compras({ shift }: ComprasProps) {
       cost: parseFloat(currentItem.purchase_price) || 0,
       stock: 0,
       category: '',
-      supplier,
     });
     await loadProducts();
     setShowNewProductModal(false);
@@ -210,7 +226,7 @@ export default function Compras({ shift }: ComprasProps) {
       return;
     }
 
-    await supabase.from('purchase_invoice_items').insert(
+    const { error: itemsError } = await supabase.from('purchase_invoice_items').insert(
       purchaseItems.map(item => ({
         invoice_id: invoiceData.id,
         product_id: item.product_id,
@@ -221,33 +237,91 @@ export default function Compras({ shift }: ComprasProps) {
       }))
     );
 
-    for (const item of purchaseItems) {
-      const { data: productData } = await supabase.from('products').select('*').eq('id', item.product_id).single();
-      if (productData) {
+    if (itemsError) {
+      await supabase.from('purchase_invoices').delete().eq('id', invoiceData.id);
+      setErrorMessage('Error al guardar los ítems de la factura');
+      return;
+    }
+
+    const processedProducts: Array<{
+      id: string;
+      stock: number;
+      cost: number;
+      price: number;
+    }> = [];
+
+    try {
+      for (const item of purchaseItems) {
+        const { data: productData, error: productError } = await supabase
+          .from('products')
+          .select('id, code, name, stock, cost, price, category')
+          .eq('id', item.product_id)
+          .single();
+
+        if (productError || !productData) {
+          throw new Error('No se pudo obtener el producto para actualizar el stock');
+        }
+
+        processedProducts.push({
+          id: productData.id,
+          stock: productData.stock || 0,
+          cost: productData.cost || 0,
+          price: productData.price || 0,
+        });
+
         const previousStock = productData.stock || 0;
         const newStock = previousStock + item.quantity;
-        await supabase.from('products').update({
-          stock: newStock,
-          cost: item.purchase_price,
-          price: item.sale_price,
-          supplier,
-        }).eq('id', item.product_id);
-        await supabase.from('inventory_movements').insert({
-          product_id: item.product_id,
-          product_code: productData.code,
-          product_name: item.product_name,
-          category: productData.category,
-          type: 'purchase',
-          quantity: item.quantity,
-          previous_stock: previousStock,
-          new_stock: newStock,
-          supplier,
-          reference: invoiceNumber,
-          user_name: currentUser?.full_name || currentUser?.name || 'Sistema',
-          shift_id: shift?.id,
-          notes: `Compra ${invoiceNumber}`,
-        });
+
+        const { error: updateProductError } = await supabase
+          .from('products')
+          .update({
+            stock: newStock,
+            cost: item.purchase_price,
+            price: item.sale_price,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', item.product_id);
+
+        if (updateProductError) {
+          throw new Error('No se pudo actualizar el stock del producto');
+        }
+
+        const { error: movementError } = await supabase
+          .from('inventory_movements')
+          .insert({
+            product_id: item.product_id,
+            product_name: item.product_name || productData.name,
+            product_category: productData.category || '',
+            type: 'entrada',
+            quantity: item.quantity,
+            reason: 'compra_proveedor',
+            supplier,
+            user_name: currentUser?.full_name || currentUser?.name || shift?.user_name || 'Sistema',
+            notes: `Compra ${invoiceNumber}`,
+          });
+
+        if (movementError) {
+          throw new Error('No se pudo registrar el movimiento de inventario');
+        }
       }
+    } catch (error) {
+      for (const processedProduct of processedProducts.reverse()) {
+        await supabase
+          .from('products')
+          .update({
+            stock: processedProduct.stock,
+            cost: processedProduct.cost,
+            price: processedProduct.price,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', processedProduct.id);
+      }
+
+      await supabase.from('inventory_movements').delete().eq('notes', `Compra ${invoiceNumber}`);
+      await supabase.from('purchase_invoices').delete().eq('id', invoiceData.id);
+
+      setErrorMessage(error instanceof Error ? error.message : 'Error al registrar la compra');
+      return;
     }
 
     setPurchaseItems([]);
@@ -320,7 +394,7 @@ export default function Compras({ shift }: ComprasProps) {
       }
     }
 
-    await supabase.from('inventory_movements').delete().eq('reference', invoiceToDelete.invoice_number);
+    await supabase.from('inventory_movements').delete().eq('notes', `Compra ${invoiceToDelete.invoice_number}`);
     await supabase.from('purchase_invoices').delete().eq('id', invoiceToDelete.id);
 
     setSelectedInvoice(null);
