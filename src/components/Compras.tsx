@@ -322,22 +322,66 @@ export default function Compras({ shift }: ComprasProps) {
       return;
     }
 
-    const { data: items } = await supabase
+    // Fetch invoice items to revert stock
+    const { data: items, error: itemsError } = await supabase
       .from('purchase_invoice_items')
       .select('*')
       .eq('invoice_id', invoiceToDelete.id);
 
-    if (items) {
+    if (itemsError) {
+      console.error('Error fetching invoice items for deletion:', itemsError);
+      setErrorMessage('Error al obtener los ítems de la factura');
+      return;
+    }
+
+    if (items && items.length > 0) {
       for (const item of items) {
-        const { data: productData } = await supabase.from('products').select('stock').eq('id', item.product_id).single();
-        if (productData) {
-          await supabase.from('products').update({ stock: (productData.stock || 0) - item.quantity }).eq('id', item.product_id);
+        // Get current stock for the product and cast to number
+        const { data: productData, error: productError } = await supabase
+          .from('products')
+          .select('stock')
+          .eq('id', item.product_id)
+          .single();
+        if (productError || !productData) {
+          console.error('Error fetching current stock for product', item.product_id, productError);
+          continue;
+        }
+        const currentStockNumber = typeof productData.stock === 'number'
+          ? productData.stock
+          : Number(productData.stock ?? 0);
+        const newStock = currentStockNumber - item.quantity;
+        // Update product stock (do not change cost or price on deletion)
+        const { error: updateError } = await supabase
+          .from('products')
+          .update({ stock: newStock })
+          .eq('id', item.product_id);
+        if (updateError) {
+          console.error('Error updating stock for product', item.product_id, updateError);
         }
       }
     }
 
-    await supabase.from('inventory_movements').delete().eq('reference', invoiceToDelete.invoice_number);
-    await supabase.from('purchase_invoices').delete().eq('id', invoiceToDelete.id);
+    // Remove associated inventory movements
+    const { error: invDeleteError } = await supabase
+      .from('inventory_movements')
+      .delete()
+      .eq('reference', invoiceToDelete.invoice_number);
+    if (invDeleteError) {
+      console.error('Error deleting inventory movements:', invDeleteError);
+    }
+
+    // Delete the purchase invoice. If this fails due to RLS, the following migration should
+    // create a delete policy. Capture any errors to notify the user.
+    const { error: invoiceDeleteError } = await supabase
+      .from('purchase_invoices')
+      .delete()
+      .eq('id', invoiceToDelete.id);
+
+    if (invoiceDeleteError) {
+      console.error('Error deleting purchase invoice:', invoiceDeleteError);
+      setErrorMessage('No se pudo eliminar la factura. Verifica las políticas de seguridad.');
+      return;
+    }
 
     setSelectedInvoice(null);
     setShowDeleteModal(false);
