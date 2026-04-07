@@ -1,0 +1,873 @@
+===========================================
+PROMPT COMPLETO PARA BOLT.NEW
+Sistema POS Kiosco Damian - Versión Exacta
+===========================================
+
+Necesito que me crees un sistema completo de Punto de Venta (POS) para kioscos con las siguientes especificaciones EXACTAS:
+
+═══════════════════════════════════════════
+1. TECNOLOGÍAS Y VERSIONES EXACTAS
+═══════════════════════════════════════════
+
+FRONTEND:
+- React 18.3.1
+- TypeScript 5.5.3
+- Vite 7.2.4
+- Tailwind CSS 3.4.18
+- Lucide React 0.344.0 (para iconos)
+
+BACKEND Y DATABASE:
+- Supabase (@supabase/supabase-js 2.57.4)
+- PostgreSQL (a través de Supabase)
+
+CONFIGURACIÓN:
+- ESLint 9.9.1
+- PostCSS 8.5.6
+- Autoprefixer 10.4.22
+
+═══════════════════════════════════════════
+2. ESTRUCTURA DE BASE DE DATOS COMPLETA
+═══════════════════════════════════════════
+
+Debes crear las siguientes tablas en Supabase con Row Level Security (RLS) habilitado:
+
+─────────────────────────────────────────
+TABLA: products
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+code: text (UNIQUE, NOT NULL)
+name: text (NOT NULL)
+description: text (default: '')
+category: text (default: '')
+price: numeric(10,2) (NOT NULL, default: 0)
+cost: numeric(10,2) (NOT NULL, default: 0)
+stock: integer (NOT NULL, default: 0)
+min_stock: integer (NOT NULL, default: 0)
+active: boolean (default: true)
+created_at: timestamptz (default: now())
+updated_at: timestamptz (default: now())
+
+Índices: idx_products_code, idx_products_category
+
+Políticas RLS: Permitir todo (SELECT, INSERT, UPDATE, DELETE) a anon y authenticated
+
+─────────────────────────────────────────
+TABLA: sales
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+sale_number: text (UNIQUE, NOT NULL)
+date: timestamptz (default: now())
+user_id: uuid (NOT NULL)
+user_name: text (NOT NULL)
+shift_id: uuid (NOT NULL)
+items: jsonb (NOT NULL, default: '[]'::jsonb) - Array de objetos {product_id, product_name, quantity, price, subtotal}
+subtotal: numeric(10,2) (NOT NULL, default: 0)
+discount: numeric(10,2) (NOT NULL, default: 0)
+total: numeric(10,2) (NOT NULL, default: 0)
+payment_method: text (NOT NULL)
+payments: jsonb - Array opcional de objetos {method, amount} para pagos múltiples
+customer_name: text (opcional)
+customer_lot: text (opcional)
+created_at: timestamptz (default: now())
+
+Índices: idx_sales_date, idx_sales_shift_id
+
+Políticas RLS: Permitir SELECT e INSERT a anon y authenticated
+
+─────────────────────────────────────────
+TABLA: cash_transactions
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+shift_id: uuid (NOT NULL)
+type: text (NOT NULL, CHECK type IN ('income', 'expense'))
+category: text (NOT NULL)
+amount: numeric(10,2) (NOT NULL, default: 0)
+payment_method: text (NOT NULL)
+description: text (default: '')
+created_at: timestamptz (default: now())
+
+Índices: idx_cash_transactions_shift_id
+
+Políticas RLS: Permitir SELECT e INSERT a anon y authenticated
+
+─────────────────────────────────────────
+TABLA: shifts
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+user_id: uuid (NOT NULL)
+user_name: text (NOT NULL)
+start_date: timestamptz (default: now())
+end_date: timestamptz (nullable)
+opening_cash: numeric(10,2) (NOT NULL, default: 0)
+closing_cash: numeric(10,2) (nullable)
+total_sales: numeric(10,2) (NOT NULL, default: 0)
+total_expenses: numeric(10,2) (NOT NULL, default: 0)
+active: boolean (default: true)
+created_at: timestamptz (default: now())
+
+Índices: idx_shifts_active
+
+Políticas RLS: Permitir SELECT, INSERT y UPDATE a anon y authenticated
+
+─────────────────────────────────────────
+TABLA: users
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+username: text (UNIQUE, NOT NULL)
+password: text (NOT NULL)
+full_name: text (NOT NULL)
+role: text (NOT NULL, CHECK role IN ('admin', 'vendedor'))
+active: boolean (default: true)
+created_at: timestamptz (default: now())
+updated_at: timestamptz (default: now())
+
+Políticas RLS: Permitir todo (SELECT, INSERT, UPDATE, DELETE) a anon y authenticated
+
+DATOS INICIALES DE USUARIOS:
+- username: "damian", password: "842114", full_name: "Damian", role: "admin", active: true
+- username: "admin", password: "842114", full_name: "Administrador", role: "admin", active: true
+
+─────────────────────────────────────────
+TABLA: configuration
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+business_name: text (default: 'Mi Negocio')
+address: text (default: '')
+phone: text (default: '')
+tax_id: text (default: '')
+currency: text (default: '$')
+receipt_message: text (default: 'Gracias por su compra')
+updated_at: timestamptz (default: now())
+
+Políticas RLS: Permitir SELECT y UPDATE a anon y authenticated
+
+DATOS INICIALES: business_name: "Kiosco Damian", currency: "$", receipt_message: "Gracias por su compra"
+
+─────────────────────────────────────────
+TABLA: inventory_movements
+─────────────────────────────────────────
+id: uuid (PRIMARY KEY, default: gen_random_uuid())
+product_id: uuid (REFERENCES products(id) ON DELETE SET NULL)
+product_name: text (NOT NULL)
+product_category: text (default: '')
+type: text (NOT NULL, CHECK type IN ('entrada', 'salida'))
+quantity: integer (NOT NULL, default: 0)
+reason: text (NOT NULL, default: 'ajuste')
+supplier: text (default: '')
+user_name: text (NOT NULL)
+notes: text (default: '')
+created_at: timestamptz (default: now())
+
+Políticas RLS: Permitir SELECT e INSERT a anon y authenticated
+
+═══════════════════════════════════════════
+3. ESTRUCTURA DE ARCHIVOS
+═══════════════════════════════════════════
+
+src/
+  ├── lib/
+  │   └── supabase.ts (Cliente Supabase + interfaces TypeScript)
+  ├── components/
+  │   ├── Dashboard.tsx
+  │   ├── Ventas.tsx
+  │   ├── Stock.tsx
+  │   ├── Movimientos.tsx
+  │   ├── Caja.tsx
+  │   ├── Reportes.tsx
+  │   └── Configuracion.tsx
+  ├── App.tsx
+  ├── main.tsx
+  └── index.css
+
+═══════════════════════════════════════════
+4. DISEÑO VISUAL Y COLORES EXACTOS
+═══════════════════════════════════════════
+
+PALETA DE COLORES ESPECÍFICA:
+
+Pantalla de Login:
+- Fondo: bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900
+- Botón login: bg-gradient-to-r from-purple-500 to-pink-600
+
+Dashboard Header:
+- Fondo: bg-white
+- Logo del negocio: bg-gradient-to-br from-emerald-500 to-teal-600
+- Título: bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent
+
+Dashboard Background:
+- Fondo: bg-gradient-to-br from-slate-50 to-slate-100
+
+Menú Lateral (colores por módulo):
+- Ventas: from-emerald-500 to-teal-600
+- Inventario: from-blue-500 to-cyan-600
+- Movimientos: from-teal-500 to-emerald-600
+- Caja: from-purple-500 to-pink-600
+- Reportes: from-orange-500 to-red-600
+- Configuración: from-gray-500 to-slate-600
+
+Tarjetas de Estadísticas en Dashboard:
+- Luces: bg-gradient-to-br from-amber-400 via-yellow-400 to-orange-400
+- Invitados: bg-gradient-to-br from-blue-500 via-cyan-500 to-teal-500
+- Artículo más vendido: bg-gradient-to-br from-pink-500 via-rose-500 to-red-500
+- Paletas: bg-gradient-to-br from-emerald-500 via-green-500 to-teal-600
+
+Botones principales:
+- Agregar/Crear: bg-gradient-to-r from-emerald-500 to-teal-600
+- Editar: bg-gradient-to-r from-blue-500 to-cyan-600
+- Eliminar: bg-gradient-to-r from-red-500 to-rose-600
+- Cerrar: bg-gradient-to-r from-slate-500 to-gray-600
+
+═══════════════════════════════════════════
+5. FUNCIONALIDAD DE APP.TSX (LOGIN Y TURNOS)
+═══════════════════════════════════════════
+
+El componente App.tsx debe manejar:
+
+1. PANTALLA DE CARGA:
+   - Mostrar spinner animado mientras verifica si hay turno activo
+   - Fondo: gradiente oscuro purple-slate
+
+2. MODAL DE LOGIN/INICIO DE TURNO:
+   - Campos requeridos:
+     * Usuario (input text)
+     * Contraseña (input password con botón show/hide)
+     * Efectivo Inicial (input number con símbolo $)
+   - Validar credenciales contra tabla "users"
+   - Al hacer login exitoso:
+     * Crear nuevo turno en tabla "shifts" con active: true
+     * Guardar opening_cash
+     * Pasar al Dashboard
+   - Mostrar errores de login en banner rojo
+
+3. DASHBOARD:
+   - Mostrar solo si hay turno activo
+   - Pasar objeto shift al componente Dashboard
+   - Implementar función handleCloseShift que:
+     * Calcule total_sales (suma de todas las ventas del turno)
+     * Calcule total_expenses (suma de egresos del turno)
+     * Actualice el turno con: end_date, closing_cash, total_sales, total_expenses
+     * Marque active: false
+     * Vuelva al modal de login
+
+═══════════════════════════════════════════
+6. FUNCIONALIDAD DE DASHBOARD.TSX
+═══════════════════════════════════════════
+
+Header del Dashboard debe mostrar:
+- Logo del negocio (icono Store con gradiente emerald-teal)
+- Nombre del negocio (cargado desde tabla configuration)
+- Reloj en tiempo real con hora de Argentina (formato HH:MM)
+- Estado del turno (Turno Activo / Sin turno activo)
+- Nombre del usuario del turno
+- Indicador visual (círculo verde pulsante si hay turno activo, gris si no)
+
+TARJETAS SUPERIORES (4 tarjetas pequeñas en fila):
+1. Caja Efectivo
+   - Muestra: efectivo_inicial + ingresos_efectivo - egresos_efectivo
+   - Texto: "Efectivo inicial + ingresos - egresos"
+   - Color: text-emerald-600
+
+2. Transferencias
+   - Muestra: ingresos_transferencia - egresos_transferencia
+   - Texto: "Ingresos - egresos por transferencia"
+   - Color: text-slate-800
+
+3. QR
+   - Muestra: ingresos_qr - egresos_qr
+   - Texto: "Ingresos - egresos por QR"
+   - Color: text-slate-800
+
+4. Expensas
+   - Muestra: ingresos_expensas - egresos_expensas
+   - Texto: "Ingresos - egresos por expensas"
+   - Color: text-slate-800
+
+TARJETAS DE ESTADÍSTICAS (4 tarjetas con gradientes):
+
+1. LUCES (amarillo-naranja):
+   - Icono: Lightbulb
+   - Contador "Hoy" y "Mes"
+   - Buscar en ventas productos que contengan "luz" o "luces" en el nombre
+   - Sumar cantidades
+
+2. INVITADOS (azul-cyan):
+   - Icono: Users
+   - Contador "Hoy" y "Mes"
+   - Buscar productos que contengan "invitado" o "invitados"
+   - Sumar cantidades
+
+3. ARTÍCULO MÁS VENDIDO (rosa-rojo):
+   - Icono: TrendingUp
+   - Mostrar nombre del producto más vendido del mes
+   - Mostrar cantidad total vendida
+   - Texto: "Art + vendido"
+
+4. PALETAS (verde-teal):
+   - Icono: Layers
+   - Contador "Hoy" y "Mes"
+   - Buscar productos que contengan "paleta", "paletas" o "alquiler"
+   - Sumar cantidades
+
+MENÚ LATERAL:
+- 6 botones con iconos y colores gradientes
+- Botón activo: escalado 1.05, con sombra
+- Botones inactivos: hover con bg-slate-50
+- Vista actual marcada visualmente
+
+CONTENIDO PRINCIPAL:
+- Header coloreado con gradiente según módulo activo
+- Icono + título del módulo
+- Área de contenido con padding
+
+═══════════════════════════════════════════
+7. MÓDULO VENTAS (Ventas.tsx)
+═══════════════════════════════════════════
+
+IMPORTANTE: Solo funciona si hay turno activo.
+
+LAYOUT EN DOS COLUMNAS:
+
+COLUMNA IZQUIERDA (Lista de productos):
+- Buscador de productos por nombre, código o categoría
+- Tarjetas de productos mostrando:
+  * Código y nombre
+  * Categoría (badge)
+  * Stock actual con alerta si stock < min_stock
+  * Precio grande
+  * Botón "Agregar al Carrito"
+- Mostrar solo productos activos (active: true)
+- Ordenar alfabéticamente
+
+COLUMNA DERECHA (Carrito):
+- Título "Carrito de Compra"
+- Lista de items con:
+  * Nombre del producto
+  * Precio unitario
+  * Botones - y + para ajustar cantidad
+  * Subtotal
+  * Botón eliminar (X rojo)
+- Tarjeta de totales:
+  * Subtotal
+  * Descuento
+  * Total (grande y destacado)
+- Botones de método de pago:
+  * Efectivo, Transferencia, QR, Tarjeta
+  * Destacar el seleccionado
+- Botón "Completar Venta" (solo si hay items)
+- Botón "Limpiar Carrito"
+
+MODAL DE PAGO MÚLTIPLE:
+- Se abre al hacer click en "Pago Múltiple"
+- Permite dividir el pago en varios métodos
+- Muestra total a pagar
+- Campos para: Efectivo, Transferencia, QR, Tarjeta
+- Calcular automáticamente faltante/sobrante
+- Solo permitir confirmar si suma exacta
+
+FLUJO DE VENTA:
+1. Usuario agrega productos al carrito
+2. Ajusta cantidades
+3. Selecciona método de pago
+4. Opcionalmente ingresa nombre de cliente y lote
+5. Al completar venta:
+   - Generar sale_number único (ej: SALE-YYYYMMDD-NNNN)
+   - Crear registro en tabla "sales" con todos los items
+   - Actualizar stock de cada producto (restar cantidades vendidas)
+   - Crear registro en "cash_transactions" tipo "income" con el total
+   - Limpiar carrito
+   - Mostrar mensaje de éxito
+
+═══════════════════════════════════════════
+8. MÓDULO INVENTARIO (Stock.tsx)
+═══════════════════════════════════════════
+
+VISTA DE TARJETAS:
+- Grid responsive de tarjetas de productos
+- Cada tarjeta muestra:
+  * Código en la esquina
+  * Nombre del producto (grande)
+  * Descripción
+  * Categoría (badge)
+  * Precio de venta (verde, grande)
+  * Costo (gris, pequeño)
+  * Stock actual con alerta visual si < min_stock
+    - Fondo rojo si stock < min_stock
+    - Texto "¡Stock Bajo!"
+  * Estado activo/inactivo
+  * Botones: Editar (azul) y Eliminar (rojo)
+
+BARRA SUPERIOR:
+- Buscador por nombre, código o categoría
+- Botón "Agregar Producto" (verde)
+- Mostrar total de productos
+
+MODAL AGREGAR/EDITAR PRODUCTO:
+Campos:
+- Código * (único)
+- Nombre *
+- Descripción
+- Categoría (select o input)
+- Precio *
+- Costo *
+- Stock *
+- Stock Mínimo *
+- Estado (Activo/Inactivo)
+
+Validaciones:
+- Código único
+- Números positivos
+- Campos requeridos
+
+Al guardar:
+- Insertar o actualizar en tabla "products"
+- Actualizar updated_at
+- Recargar lista
+
+ELIMINAR PRODUCTO:
+- Modal de confirmación
+- Eliminar de la base de datos
+- Actualizar lista
+
+═══════════════════════════════════════════
+9. MÓDULO MOVIMIENTOS (Movimientos.tsx)
+═══════════════════════════════════════════
+
+IMPORTANTE: Solo funciona si hay turno activo.
+
+TARJETAS DE ESTADÍSTICAS:
+- Total Entradas (verde)
+- Total Salidas (rojo)
+- Total Movimientos (azul)
+
+FILTROS:
+- Por fecha: Hoy, Última semana, Último mes, Todo el período
+- Por tipo: Todos, Entradas, Salidas
+- Búsqueda por: producto, proveedor o rubro
+
+TABLA DE MOVIMIENTOS:
+Columnas:
+- Fecha y Hora
+- Tipo (badge verde para entrada, rojo para salida)
+- Producto
+- Rubro/Categoría
+- Cantidad
+- Razón
+- Proveedor (solo para entradas)
+- Usuario
+- Notas
+
+Ordenar por fecha descendente (más reciente primero)
+
+BOTÓN "Registrar Ingreso":
+Modal con campos:
+- Seleccionar Producto (dropdown)
+- Cantidad * (número positivo)
+- Proveedor * (text)
+- Notas (textarea opcional)
+
+Al guardar:
+- Crear registro en "inventory_movements" tipo "entrada"
+- Actualizar stock del producto (sumar cantidad)
+- Recargar tabla
+
+═══════════════════════════════════════════
+10. MÓDULO CAJA (Caja.tsx)
+═══════════════════════════════════════════
+
+IMPORTANTE: Solo funciona si hay turno activo.
+
+TARJETAS SUPERIORES (3 tarjetas):
+1. INGRESOS (verde)
+   - Sumar todos los cash_transactions tipo "income"
+   - Icono: TrendingUp
+
+2. EGRESOS (rojo)
+   - Sumar todos los cash_transactions tipo "expense"
+   - Icono: TrendingDown
+
+3. BALANCE (azul)
+   - Ingresos - Egresos
+   - Icono: DollarSign
+
+TARJETAS DE SALDO POR MÉTODO:
+- Caja Efectivo: inicial + ingresos - egresos
+- Transferencias: ingresos - egresos
+- QR: ingresos - egresos
+- Expensas: ingresos - egresos
+
+FILTROS:
+- Solo este turno
+- Hoy
+- Última semana
+- Último mes
+- Rango personalizado (fecha inicio y fin)
+- Todos
+
+TABLA DE MOVIMIENTOS:
+Columnas:
+- Fecha y Hora (con segundos)
+- Tipo (badge verde Ingreso, rojo Egreso)
+- Categoría
+- Monto (color según tipo)
+- Método de Pago (badge)
+- Descripción
+- Acción: Ver Detalle (icono ojo)
+
+CLICK EN MOVIMIENTO:
+Abrir modal con:
+- Si es venta (category: "venta"):
+  * Información del cliente y lote
+  * Tabla de items vendidos con cantidades y precios
+  * Desglose de pagos si hay múltiples métodos
+  * Total de la venta
+- Si es otro movimiento:
+  * Tipo y categoría
+  * Monto
+  * Método de pago
+  * Descripción completa
+
+BOTONES:
+- Agregar Ingreso (verde)
+- Agregar Egreso (rojo)
+- Exportar CSV
+- Cerrar Turno (solo si es el turno activo)
+
+MODAL AGREGAR INGRESO/EGRESO:
+Campos:
+- Categoría * (select: venta, otro ingreso, gasto, pago proveedor, etc.)
+- Monto * (número positivo)
+- Método de Pago * (Efectivo, Transferencia, QR, Tarjeta, Expensas)
+- Descripción *
+
+MODAL CERRAR TURNO:
+- Mostrar resumen del turno:
+  * Efectivo inicial
+  * Total ventas
+  * Total egresos
+  * Efectivo esperado
+- Input para "Efectivo Real en Caja"
+- Calcular diferencia (real - esperado)
+- Mostrar diferencia en rojo si faltante, verde si sobrante
+- Botón confirmar cierre
+- Al confirmar: ejecutar handleCloseShift del Dashboard
+
+═══════════════════════════════════════════
+11. MÓDULO REPORTES (Reportes.tsx)
+═══════════════════════════════════════════
+
+FILTROS:
+- Hoy
+- Esta Semana
+- Este Mes
+- Todo
+
+TARJETAS DE MÉTRICAS (4 tarjetas):
+1. Ventas Totales ($)
+2. Ticket Promedio ($)
+3. Items Vendidos (cantidad)
+4. Tasa de Crecimiento (%)
+
+ANÁLISIS POR MÉTODO DE PAGO:
+- Tabla o tarjetas mostrando:
+  * Método de pago
+  * Total en ese método
+  * Porcentaje del total
+
+TABLA DE ÚLTIMAS VENTAS:
+- Mostrar últimas 20 ventas
+- Columnas:
+  * Fecha
+  * N° Venta
+  * Cliente
+  * Items (cantidad)
+  * Total
+  * Método de Pago
+
+PRODUCTOS MÁS VENDIDOS:
+- Top 10 productos
+- Mostrar: nombre, cantidad vendida, total en $
+
+═══════════════════════════════════════════
+12. MÓDULO CONFIGURACIÓN (Configuracion.tsx)
+═══════════════════════════════════════════
+
+SISTEMA DE AUTENTICACIÓN:
+- Requiere contraseña "842114" para acceder
+- Modal de autenticación antes de mostrar contenido
+- Input password con validación
+
+PESTAÑAS:
+
+TAB 1: DATOS DEL NEGOCIO
+Campos editables:
+- Nombre del Negocio
+- Dirección
+- Teléfono
+- CUIT/RUT
+- Símbolo de Moneda
+- Mensaje en Recibo
+Botón "Guardar Cambios" que actualiza tabla configuration
+
+TAB 2: USUARIOS
+- Lista de usuarios con:
+  * Nombre completo
+  * Usuario
+  * Rol (Admin/Vendedor)
+  * Estado (Activo/Inactivo)
+  * Acciones: Editar, Eliminar
+- Botón "Agregar Usuario"
+
+Modal Agregar/Editar Usuario:
+Campos:
+- Nombre Completo *
+- Usuario * (único)
+- Contraseña *
+- Repetir Contraseña *
+- Rol * (Admin/Vendedor)
+- Estado (Activo/Inactivo)
+
+TAB 3: CIERRES DE TURNO
+- Tabla con todos los turnos cerrados
+- Columnas:
+  * Usuario
+  * Fecha Inicio - Fecha Fin
+  * Efectivo Inicial
+  * Efectivo Final
+  * Total Ventas
+  * Total Egresos
+  * Diferencia (color según + o -)
+- Ordenar por fecha descendente
+
+TAB 4: BACKUP
+Sección 1 - Descargar Backup:
+- Botón "Descargar Backup Ahora"
+- Al hacer click:
+  * Obtener todos los datos de todas las tablas
+  * Crear objeto JSON con:
+    - backup_date: fecha actual
+    - version: "1.0.0"
+    - data: {
+        configuration: [...],
+        users: [...],
+        products: [...],
+        sales: [...],
+        cash_transactions: [...],
+        shifts: [...],
+        inventory_movements: [...]
+      }
+  * Descargar como archivo: backup-kiosco-damian-YYYY-MM-DD-HHmmss.json
+  * Guardar fecha del último backup en localStorage
+- Mostrar fecha del último backup realizado
+
+Sección 2 - Restaurar Backup:
+- Input file para seleccionar archivo JSON
+- Validar que sea un archivo JSON válido
+- Botón "Restaurar Backup"
+- Modal de confirmación con ADVERTENCIAS EN ROJO:
+  * Advertir que eliminará TODOS los datos actuales
+  * Listar qué se eliminará
+  * Requerir confirmación explícita
+- Al confirmar:
+  * Eliminar todos los registros de todas las tablas
+  * Insertar datos del backup en orden:
+    1. configuration
+    2. users
+    3. products
+    4. shifts
+    5. sales
+    6. cash_transactions
+    7. inventory_movements
+  * Mostrar progreso en tiempo real
+  * Recargar página al finalizar
+
+Sección 3 - Envío por Email:
+- Mensaje: "Próximamente - Configuración de backups automáticos por email"
+- Botón deshabilitado
+
+═══════════════════════════════════════════
+13. DETALLES IMPORTANTES DE IMPLEMENTACIÓN
+═══════════════════════════════════════════
+
+MANEJO DE ESTADO:
+- Usar useState y useEffect de React
+- No usar librerías de gestión de estado global
+- Pasar props necesarias entre componentes
+
+LLAMADAS A SUPABASE:
+- Usar supabase.from('tabla').select/insert/update/delete
+- Siempre usar .maybeSingle() para queries que esperan 0 o 1 resultado
+- Manejar errores con try/catch
+- Mostrar mensajes de error al usuario
+
+VALIDACIONES:
+- Validar campos requeridos
+- Validar tipos de datos
+- Validar unicidad donde corresponda
+- Mostrar errores claros al usuario
+
+FECHAS Y HORAS:
+- Usar zona horaria de Argentina (America/Argentina/Buenos_Aires)
+- Formato de visualización: DD/MM/YYYY HH:mm:ss
+- Almacenar en DB como timestamptz
+
+FORMATO DE NÚMEROS:
+- Precios y montos: 2 decimales
+- Usar .toFixed(2) para mostrar
+- Símbolo $ antes del número
+
+RESPONSIVE DESIGN:
+- Mobile first
+- Usar grid de Tailwind
+- Breakpoints: sm, md, lg, xl
+- En móvil: menú puede ser horizontal o hamburger
+
+ICONOS (todos de lucide-react):
+- Store: negocio/tienda
+- ShoppingCart: ventas
+- Package: inventario
+- Clock: movimientos
+- Wallet: caja
+- BarChart3: reportes
+- Settings: configuración
+- Plus: agregar
+- Edit: editar
+- Trash2: eliminar
+- Eye: ver detalle
+- EyeOff: ocultar
+- Lightbulb: luces
+- Users: invitados
+- TrendingUp: crecimiento
+- TrendingDown: decrecimiento
+- DollarSign: dinero
+- Layers: paletas
+
+ANIMACIONES:
+- Spinner: animate-spin
+- Punto de turno activo: animate-pulse
+- Transiciones suaves: transition-all duration-200
+- Hover: scale-102 o scale-105
+
+SOMBRAS Y BORDES:
+- Tarjetas: shadow-xl, rounded-2xl
+- Inputs: border-2, rounded-xl
+- Botones: shadow-lg, rounded-xl
+
+═══════════════════════════════════════════
+14. FLUJOS IMPORTANTES
+═══════════════════════════════════════════
+
+FLUJO COMPLETO DE UNA VENTA:
+1. Usuario inicia turno con efectivo inicial
+2. Entra al módulo Ventas
+3. Busca y agrega productos al carrito
+4. Ajusta cantidades
+5. Selecciona método de pago (o pago múltiple)
+6. Opcionalmente ingresa datos de cliente
+7. Confirma venta
+8. Sistema:
+   - Genera número de venta único
+   - Crea registro en sales con items completos
+   - Actualiza stock de cada producto
+   - Crea transacción en cash_transactions tipo income
+   - Limpia carrito
+9. Usuario puede continuar vendiendo
+
+FLUJO DE CIERRE DE TURNO:
+1. Usuario va a módulo Caja
+2. Click en "Cerrar Turno"
+3. Sistema muestra:
+   - Efectivo inicial
+   - Ventas en efectivo del turno
+   - Egresos en efectivo del turno
+   - Efectivo esperado = inicial + ventas - egresos
+4. Usuario ingresa efectivo real contado
+5. Sistema calcula diferencia
+6. Usuario confirma cierre
+7. Sistema:
+   - Actualiza turno con end_date, closing_cash, totales
+   - Marca turno como inactivo
+   - Vuelve a pantalla de login
+8. Siguiente usuario puede iniciar nuevo turno
+
+FLUJO DE BACKUP Y RESTAURACIÓN:
+1. Usuario va a Configuración → Backup
+2. Click en "Descargar Backup"
+3. Sistema descarga JSON con todos los datos
+4. Usuario guarda archivo en lugar seguro
+5. Si necesita restaurar:
+   - Selecciona archivo de backup
+   - Click en "Restaurar Backup"
+   - Lee advertencias
+   - Confirma
+   - Sistema borra todo y carga datos del backup
+   - Página se recarga
+   - Sistema queda como estaba en la fecha del backup
+
+═══════════════════════════════════════════
+15. PRODUCTOS DE EJEMPLO
+═══════════════════════════════════════════
+
+Insertar estos 5 productos de ejemplo:
+
+1. code: '001', name: 'Coca Cola 500ml', description: 'Gaseosa Coca Cola 500ml', category: 'Bebidas', price: 2.50, cost: 1.50, stock: 50, min_stock: 10
+
+2. code: '002', name: 'Agua Mineral 500ml', description: 'Agua mineral sin gas', category: 'Bebidas', price: 1.50, cost: 0.80, stock: 100, min_stock: 20
+
+3. code: '003', name: 'Alfajor Havanna', description: 'Alfajor de dulce de leche', category: 'Golosinas', price: 3.00, cost: 2.00, stock: 30, min_stock: 10
+
+4. code: '004', name: 'Galletitas Oreo', description: 'Galletitas Oreo pack 6', category: 'Golosinas', price: 4.50, cost: 3.00, stock: 40, min_stock: 15
+
+5. code: '005', name: 'Caramelos Sugus', description: 'Caramelos Sugus bolsa', category: 'Golosinas', price: 2.00, cost: 1.20, stock: 60, min_stock: 20
+
+═══════════════════════════════════════════
+16. VARIABLES DE ENTORNO
+═══════════════════════════════════════════
+
+Crear archivo .env con:
+
+VITE_SUPABASE_URL=tu_supabase_url
+VITE_SUPABASE_ANON_KEY=tu_supabase_anon_key
+
+El usuario configurará estas variables con sus credenciales de Supabase.
+
+═══════════════════════════════════════════
+17. REQUISITOS FINALES
+═══════════════════════════════════════════
+
+1. DEBE ser un sistema completamente funcional y listo para producción
+2. TODOS los módulos deben funcionar perfectamente
+3. La UI debe ser moderna, limpia y profesional
+4. Responsive en todos los dispositivos
+5. Sin bugs ni errores en consola
+6. Validaciones completas en todos los formularios
+7. Mensajes de error claros y útiles
+8. Feedback visual en todas las acciones
+9. Transiciones suaves
+10. Código limpio y bien organizado
+11. TypeScript sin errores
+12. Comentarios donde sea necesario
+13. Manejo de errores en todas las operaciones async
+14. Loading states en operaciones que toman tiempo
+15. Confirmaciones para acciones destructivas
+
+═══════════════════════════════════════════
+RESULTADO ESPERADO
+═══════════════════════════════════════════
+
+Un sistema POS completo, funcional y profesional que permita:
+- Gestionar inventario de productos
+- Procesar ventas con múltiples métodos de pago
+- Controlar movimientos de caja
+- Registrar movimientos de inventario
+- Generar reportes de ventas
+- Gestionar usuarios y turnos
+- Configurar el negocio
+- Hacer backup y restaurar datos completos
+
+Con diseño moderno, gradientes coloridos, animaciones suaves y experiencia de usuario excepcional.
+
+El sistema debe ser EXACTAMENTE como se describió, sin omitir ninguna funcionalidad ni detalle visual.
+
+═══════════════════════════════════════════
+FIN DEL PROMPT
+═══════════════════════════════════════════
