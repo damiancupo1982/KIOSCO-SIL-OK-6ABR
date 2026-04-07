@@ -221,33 +221,15 @@ export default function Compras({ shift }: ComprasProps) {
       }))
     );
 
+    // Update cost, price and supplier for each product.
+    // Stock update and inventory_movements recording are handled automatically
+    // by the database trigger trg_update_stock_on_purchase on purchase_invoice_items.
     for (const item of purchaseItems) {
-      const { data: productData } = await supabase.from('products').select('*').eq('id', item.product_id).single();
-      if (productData) {
-        const previousStock = productData.stock || 0;
-        const newStock = previousStock + item.quantity;
-        await supabase.from('products').update({
-          stock: newStock,
-          cost: item.purchase_price,
-          price: item.sale_price,
-          supplier,
-        }).eq('id', item.product_id);
-        await supabase.from('inventory_movements').insert({
-          product_id: item.product_id,
-          product_code: productData.code,
-          product_name: item.product_name,
-          category: productData.category,
-          type: 'purchase',
-          quantity: item.quantity,
-          previous_stock: previousStock,
-          new_stock: newStock,
-          supplier,
-          reference: invoiceNumber,
-          user_name: currentUser?.full_name || currentUser?.name || 'Sistema',
-          shift_id: shift?.id,
-          notes: `Compra ${invoiceNumber}`,
-        });
-      }
+      await supabase.from('products').update({
+        cost: item.purchase_price,
+        price: item.sale_price,
+        supplier,
+      }).eq('id', item.product_id);
     }
 
     setPurchaseItems([]);
