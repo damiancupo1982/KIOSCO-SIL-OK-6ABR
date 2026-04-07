@@ -278,7 +278,6 @@ export default function Compras({ shift }: ComprasProps) {
             stock: newStock,
             cost: item.purchase_price,
             price: item.sale_price,
-            updated_at: new Date().toISOString(),
           })
           .eq('id', item.product_id);
 
@@ -307,14 +306,14 @@ export default function Compras({ shift }: ComprasProps) {
     } catch (error) {
       let rollbackFailed = false;
 
-      for (const processedProduct of processedProducts.slice().reverse()) {
+      for (let index = processedProducts.length - 1; index >= 0; index -= 1) {
+        const processedProduct = processedProducts[index];
         const { error: rollbackProductError } = await supabase
           .from('products')
           .update({
             stock: processedProduct.stock,
             cost: processedProduct.cost,
             price: processedProduct.price,
-            updated_at: new Date().toISOString(),
           })
           .eq('id', processedProduct.id);
 
@@ -345,7 +344,11 @@ export default function Compras({ shift }: ComprasProps) {
       }
 
       const baseError = error instanceof Error ? error.message : 'Error al registrar la compra';
-      setErrorMessage(rollbackFailed ? `${baseError}. Revisá los datos porque la reversión fue parcial.` : baseError);
+      setErrorMessage(
+        rollbackFailed
+          ? `${baseError}. La reversión fue parcial; verificá stock y movimientos de inventario.`
+          : baseError
+      );
       return;
     }
 
