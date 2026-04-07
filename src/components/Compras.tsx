@@ -305,7 +305,7 @@ export default function Compras({ shift }: ComprasProps) {
         }
       }
     } catch (error) {
-      for (const processedProduct of processedProducts.reverse()) {
+      for (const processedProduct of processedProducts.slice().reverse()) {
         await supabase
           .from('products')
           .update({
@@ -317,7 +317,13 @@ export default function Compras({ shift }: ComprasProps) {
           .eq('id', processedProduct.id);
       }
 
-      await supabase.from('inventory_movements').delete().eq('notes', `Compra ${invoiceNumber}`);
+      const purchaseProductIds = [...new Set(purchaseItems.map(item => item.product_id))];
+      await supabase
+        .from('inventory_movements')
+        .delete()
+        .eq('notes', `Compra ${invoiceNumber}`)
+        .eq('supplier', supplier)
+        .in('product_id', purchaseProductIds);
       await supabase.from('purchase_invoices').delete().eq('id', invoiceData.id);
 
       setErrorMessage(error instanceof Error ? error.message : 'Error al registrar la compra');
@@ -386,15 +392,22 @@ export default function Compras({ shift }: ComprasProps) {
       .eq('invoice_id', invoiceToDelete.id);
 
     if (items) {
+      const productIds = [...new Set(items.map(item => item.product_id))];
+
       for (const item of items) {
         const { data: productData } = await supabase.from('products').select('stock').eq('id', item.product_id).single();
         if (productData) {
           await supabase.from('products').update({ stock: (productData.stock || 0) - item.quantity }).eq('id', item.product_id);
         }
       }
-    }
 
-    await supabase.from('inventory_movements').delete().eq('notes', `Compra ${invoiceToDelete.invoice_number}`);
+      await supabase
+        .from('inventory_movements')
+        .delete()
+        .eq('notes', `Compra ${invoiceToDelete.invoice_number}`)
+        .eq('supplier', invoiceToDelete.supplier)
+        .in('product_id', productIds);
+    }
     await supabase.from('purchase_invoices').delete().eq('id', invoiceToDelete.id);
 
     setSelectedInvoice(null);
