@@ -8,9 +8,19 @@ CREATE TABLE IF NOT EXISTS purchase_invoices (
   created_at timestamptz DEFAULT now()
 );
 ALTER TABLE purchase_invoices ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "public_select" ON purchase_invoices FOR SELECT USING (true);
-CREATE POLICY "public_insert" ON purchase_invoices FOR INSERT WITH CHECK (true);
-CREATE POLICY "public_update" ON purchase_invoices FOR UPDATE USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_select' AND tablename = 'purchase_invoices') THEN
+    CREATE POLICY "public_select" ON purchase_invoices FOR SELECT USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_insert' AND tablename = 'purchase_invoices') THEN
+    CREATE POLICY "public_insert" ON purchase_invoices FOR INSERT WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_update' AND tablename = 'purchase_invoices') THEN
+    CREATE POLICY "public_update" ON purchase_invoices FOR UPDATE USING (true);
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS purchase_invoice_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -23,8 +33,16 @@ CREATE TABLE IF NOT EXISTS purchase_invoice_items (
   created_at timestamptz DEFAULT now()
 );
 ALTER TABLE purchase_invoice_items ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "public_select" ON purchase_invoice_items FOR SELECT USING (true);
-CREATE POLICY "public_insert" ON purchase_invoice_items FOR INSERT WITH CHECK (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_select' AND tablename = 'purchase_invoice_items') THEN
+    CREATE POLICY "public_select" ON purchase_invoice_items FOR SELECT USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_insert' AND tablename = 'purchase_invoice_items') THEN
+    CREATE POLICY "public_insert" ON purchase_invoice_items FOR INSERT WITH CHECK (true);
+  END IF;
+END
+$$;
 CREATE INDEX IF NOT EXISTS idx_pii_invoice_id ON purchase_invoice_items(invoice_id);
 CREATE INDEX IF NOT EXISTS idx_pii_product_id ON purchase_invoice_items(product_id);
 
@@ -36,8 +54,16 @@ CREATE TABLE IF NOT EXISTS purchase_payments (
   created_at timestamptz DEFAULT now()
 );
 ALTER TABLE purchase_payments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "public_select" ON purchase_payments FOR SELECT USING (true);
-CREATE POLICY "public_insert" ON purchase_payments FOR INSERT WITH CHECK (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_select' AND tablename = 'purchase_payments') THEN
+    CREATE POLICY "public_select" ON purchase_payments FOR SELECT USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_insert' AND tablename = 'purchase_payments') THEN
+    CREATE POLICY "public_insert" ON purchase_payments FOR INSERT WITH CHECK (true);
+  END IF;
+END
+$$;
 CREATE INDEX IF NOT EXISTS idx_pp_invoice_id ON purchase_payments(invoice_id);
 
 CREATE OR REPLACE FUNCTION generate_purchase_invoice_number()
@@ -113,6 +139,16 @@ CREATE TABLE IF NOT EXISTS inventory_movements (
   created_at timestamptz DEFAULT now()
 );
 ALTER TABLE inventory_movements ENABLE ROW LEVEL SECURITY;
-CREATE POLICY IF NOT EXISTS "public_select_im" ON inventory_movements FOR SELECT USING (true);
-CREATE POLICY IF NOT EXISTS "public_insert_im" ON inventory_movements FOR INSERT WITH CHECK (true);
-CREATE POLICY IF NOT EXISTS "public_delete_im" ON inventory_movements FOR DELETE USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_select_im' AND tablename = 'inventory_movements') THEN
+    CREATE POLICY "public_select_im" ON inventory_movements FOR SELECT USING (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_insert_im' AND tablename = 'inventory_movements') THEN
+    CREATE POLICY "public_insert_im" ON inventory_movements FOR INSERT WITH CHECK (true);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'public_delete_im' AND tablename = 'inventory_movements') THEN
+    CREATE POLICY "public_delete_im" ON inventory_movements FOR DELETE USING (true);
+  END IF;
+END
+$$;
