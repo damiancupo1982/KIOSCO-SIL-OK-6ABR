@@ -195,12 +195,7 @@ export default function Reportes() {
   const dailySummary: DailySummaryRow[] = useMemo(() => {
     const map = new Map<string, Omit<DailySummaryRow, 'date'>>();
 
-    // Ventas
-    filteredSales.forEach((sale) => {
-      const date = formatDate((sale as any).created_at);
-      const b = getPaymentBreakdownForSale(sale);
-
-      const emptyDay = () => ({
+    const emptyDay = () => ({
       efectivo: 0,
       transferencia: 0,
       qr: 0,
@@ -213,7 +208,12 @@ export default function Reportes() {
       egresos_expensa: 0,
     });
 
-    const prev = map.get(date) || emptyDay();
+    // Ventas
+    filteredSales.forEach((sale) => {
+      const date = formatDate((sale as any).created_at);
+      const b = getPaymentBreakdownForSale(sale);
+
+      const prev = map.get(date) || emptyDay();
 
       prev.efectivo += b.efectivo;
       prev.transferencia += b.transferencia;
