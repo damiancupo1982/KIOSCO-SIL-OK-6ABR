@@ -20,6 +20,10 @@ type DailySummaryRow = {
   expensa: number;
   total: number; // ventas
   egresos: number;
+  egresos_efectivo: number;
+  egresos_transferencia: number;
+  egresos_qr: number;
+  egresos_expensa: number;
 };
 
 export default function Reportes() {
@@ -196,14 +200,20 @@ export default function Reportes() {
       const date = formatDate((sale as any).created_at);
       const b = getPaymentBreakdownForSale(sale);
 
-      const prev = map.get(date) || {
-        efectivo: 0,
-        transferencia: 0,
-        qr: 0,
-        expensa: 0,
-        total: 0,
-        egresos: 0,
-      };
+      const emptyDay = () => ({
+      efectivo: 0,
+      transferencia: 0,
+      qr: 0,
+      expensa: 0,
+      total: 0,
+      egresos: 0,
+      egresos_efectivo: 0,
+      egresos_transferencia: 0,
+      egresos_qr: 0,
+      egresos_expensa: 0,
+    });
+
+    const prev = map.get(date) || emptyDay();
 
       prev.efectivo += b.efectivo;
       prev.transferencia += b.transferencia;
@@ -220,17 +230,18 @@ export default function Reportes() {
       .forEach((tx) => {
         const date = formatDate(tx.created_at);
         const amount = Number(tx.amount) || 0;
+        const method = String(tx.payment_method || '').toLowerCase();
 
-        const prev = map.get(date) || {
-          efectivo: 0,
-          transferencia: 0,
-          qr: 0,
-          expensa: 0,
-          total: 0,
-          egresos: 0,
-        };
+        const prev = map.get(date) || emptyDay();
 
         prev.egresos += amount;
+
+        if (method === 'efectivo') prev.egresos_efectivo += amount;
+        else if (method === 'transferencia') prev.egresos_transferencia += amount;
+        else if (method === 'qr') prev.egresos_qr += amount;
+        else if (method === 'expensas' || method === 'expensa') prev.egresos_expensa += amount;
+        else prev.egresos_efectivo += amount;
+
         map.set(date, prev);
       });
 
@@ -257,9 +268,13 @@ export default function Reportes() {
         acc.expensa += row.expensa;
         acc.total += row.total;
         acc.egresos += row.egresos;
+        acc.egresos_efectivo += row.egresos_efectivo;
+        acc.egresos_transferencia += row.egresos_transferencia;
+        acc.egresos_qr += row.egresos_qr;
+        acc.egresos_expensa += row.egresos_expensa;
         return acc;
       },
-      { efectivo: 0, transferencia: 0, qr: 0, expensa: 0, total: 0, egresos: 0 }
+      { efectivo: 0, transferencia: 0, qr: 0, expensa: 0, total: 0, egresos: 0, egresos_efectivo: 0, egresos_transferencia: 0, egresos_qr: 0, egresos_expensa: 0 }
     );
   }, [dailySummary]);
 
@@ -367,6 +382,7 @@ export default function Reportes() {
       else if (lower === 'transferencia') transferencia = neg;
       else if (lower === 'qr') qr = neg;
       else if (lower === 'expensas' || lower === 'expensa') expensa = neg;
+      else efectivo = neg;
 
       rows.push([
         formatDate(tx.created_at),
@@ -958,22 +974,66 @@ export default function Reportes() {
                     {dailySummary.map((r) => (
                       <tr key={r.date} className="hover:bg-slate-50">
                         <td className="px-4 py-2 text-sm text-slate-800">{r.date}</td>
-                        <td className="px-4 py-2 text-sm text-right">${r.efectivo.toFixed(2)}</td>
-                        <td className="px-4 py-2 text-sm text-right">${r.transferencia.toFixed(2)}</td>
-                        <td className="px-4 py-2 text-sm text-right">${r.qr.toFixed(2)}</td>
-                        <td className="px-4 py-2 text-sm text-right">${r.expensa.toFixed(2)}</td>
+                        <td className="px-4 py-2 text-sm text-right">
+                          <span>${r.efectivo.toFixed(2)}</span>
+                          {r.egresos_efectivo > 0 && (
+                            <span className="block text-red-600 font-medium">-${r.egresos_efectivo.toFixed(2)}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right">
+                          <span>${r.transferencia.toFixed(2)}</span>
+                          {r.egresos_transferencia > 0 && (
+                            <span className="block text-red-600 font-medium">-${r.egresos_transferencia.toFixed(2)}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right">
+                          <span>${r.qr.toFixed(2)}</span>
+                          {r.egresos_qr > 0 && (
+                            <span className="block text-red-600 font-medium">-${r.egresos_qr.toFixed(2)}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right">
+                          <span>${r.expensa.toFixed(2)}</span>
+                          {r.egresos_expensa > 0 && (
+                            <span className="block text-red-600 font-medium">-${r.egresos_expensa.toFixed(2)}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-sm text-right font-semibold">${r.total.toFixed(2)}</td>
-                        <td className="px-4 py-2 text-sm text-right">${r.egresos.toFixed(2)}</td>
+                        <td className="px-4 py-2 text-sm text-right text-red-600 font-medium">
+                          {r.egresos > 0 ? `-$${r.egresos.toFixed(2)}` : '$0.00'}
+                        </td>
                       </tr>
                     ))}
                     <tr className="bg-yellow-50">
                       <td className="px-4 py-2 text-sm font-bold">TOTAL</td>
-                      <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.efectivo.toFixed(2)}</td>
-                      <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.transferencia.toFixed(2)}</td>
-                      <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.qr.toFixed(2)}</td>
-                      <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.expensa.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold">
+                        <span>${dailySummaryTotals.efectivo.toFixed(2)}</span>
+                        {dailySummaryTotals.egresos_efectivo > 0 && (
+                          <span className="block text-red-600">-${dailySummaryTotals.egresos_efectivo.toFixed(2)}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold">
+                        <span>${dailySummaryTotals.transferencia.toFixed(2)}</span>
+                        {dailySummaryTotals.egresos_transferencia > 0 && (
+                          <span className="block text-red-600">-${dailySummaryTotals.egresos_transferencia.toFixed(2)}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold">
+                        <span>${dailySummaryTotals.qr.toFixed(2)}</span>
+                        {dailySummaryTotals.egresos_qr > 0 && (
+                          <span className="block text-red-600">-${dailySummaryTotals.egresos_qr.toFixed(2)}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold">
+                        <span>${dailySummaryTotals.expensa.toFixed(2)}</span>
+                        {dailySummaryTotals.egresos_expensa > 0 && (
+                          <span className="block text-red-600">-${dailySummaryTotals.egresos_expensa.toFixed(2)}</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.total.toFixed(2)}</td>
-                      <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.egresos.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-red-600">
+                        {dailySummaryTotals.egresos > 0 ? `-$${dailySummaryTotals.egresos.toFixed(2)}` : '$0.00'}
+                      </td>
                     </tr>
                   </tbody>
                 </table>
