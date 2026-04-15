@@ -322,56 +322,14 @@ export default function Compras({ shift }: ComprasProps) {
       return;
     }
 
-    // Fetch invoice items to revert stock
-    const { data: items, error: itemsError } = await supabase
-      .from('purchase_invoice_items')
-      .select('*')
-      .eq('invoice_id', invoiceToDelete.id);
-
-    if (itemsError) {
-      console.error('Error fetching invoice items for deletion:', itemsError);
-      setErrorMessage('Error al obtener los ítems de la factura');
-      return;
-    }
-
-    if (items && items.length > 0) {
-      for (const item of items) {
-        // Get current stock for the product and cast to number
-        const { data: productData, error: productError } = await supabase
-          .from('products')
-          .select('stock')
-          .eq('id', item.product_id)
-          .single();
-        if (productError || !productData) {
-          console.error('Error fetching current stock for product', item.product_id, productError);
-          continue;
-        }
-        const currentStockNumber = typeof productData.stock === 'number'
-          ? productData.stock
-          : Number(productData.stock ?? 0);
-        const newStock = currentStockNumber - item.quantity;
-        // Update product stock (do not change cost or price on deletion)
-        const { error: updateError } = await supabase
-          .from('products')
-          .update({ stock: newStock })
-          .eq('id', item.product_id);
-        if (updateError) {
-          console.error('Error updating stock for product', item.product_id, updateError);
-        }
-      }
-    }
-
     // Remove associated inventory movements
-    const { error: invDeleteError } = await supabase
+    await supabase
       .from('inventory_movements')
       .delete()
       .eq('reference', invoiceToDelete.invoice_number);
-    if (invDeleteError) {
-      console.error('Error deleting inventory movements:', invDeleteError);
-    }
 
-    // Delete the purchase invoice. If this fails due to RLS, the following migration should
-    // create a delete policy. Capture any errors to notify the user.
+    // Delete the invoice — the DB trigger revert_stock_on_purchase_delete fires
+    // automatically via ON DELETE CASCADE on purchase_invoice_items, reverting stock.
     const { error: invoiceDeleteError } = await supabase
       .from('purchase_invoices')
       .delete()
