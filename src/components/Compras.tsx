@@ -521,28 +521,34 @@ export default function Compras({ shift }: ComprasProps) {
             </div>
 
             <div className="px-6 py-4 overflow-y-auto max-h-64">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-slate-500 text-xs uppercase border-b border-slate-100">
-                    <th className="text-left pb-2">Producto</th>
-                    <th className="text-right pb-2">Cant.</th>
-                    <th className="text-right pb-2">P.Compra</th>
-                    <th className="text-right pb-2">P.Venta</th>
-                    <th className="text-right pb-2">Subtotal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedInvoice.items.map((item, idx) => (
-                    <tr key={idx} className="border-b border-slate-50">
-                      <td className="py-1.5 text-slate-700">{item.product_name}</td>
-                      <td className="py-1.5 text-right text-slate-600">{item.quantity}</td>
-                      <td className="py-1.5 text-right text-slate-600">${Number(item.purchase_price).toFixed(2)}</td>
-                      <td className="py-1.5 text-right text-slate-600">${Number(item.sale_price).toFixed(2)}</td>
-                      <td className="py-1.5 text-right font-medium">${Number(item.subtotal).toFixed(2)}</td>
+              {selectedInvoice.items.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">
+                  Esta factura no tiene items registrados. Fue creada con una versión anterior del sistema que tenía un error en el guardado de productos.
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-slate-500 text-xs uppercase border-b border-slate-100">
+                      <th className="text-left pb-2">Producto</th>
+                      <th className="text-right pb-2">Cant.</th>
+                      <th className="text-right pb-2">P.Compra</th>
+                      <th className="text-right pb-2">P.Venta</th>
+                      <th className="text-right pb-2">Subtotal</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {selectedInvoice.items.map((item, idx) => (
+                      <tr key={idx} className="border-b border-slate-50">
+                        <td className="py-1.5 text-slate-700">{item.product_name}</td>
+                        <td className="py-1.5 text-right text-slate-600">{item.quantity}</td>
+                        <td className="py-1.5 text-right text-slate-600">${Number(item.purchase_price).toFixed(2)}</td>
+                        <td className="py-1.5 text-right text-slate-600">${Number(item.sale_price).toFixed(2)}</td>
+                        <td className="py-1.5 text-right font-medium">${Number(item.subtotal).toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
 
             <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 space-y-1 text-sm">
