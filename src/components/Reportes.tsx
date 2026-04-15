@@ -728,7 +728,26 @@ export default function Reportes() {
     printWindow.print();
   };
 
+  const expenses = useMemo(() => cashTransactions.filter((tx) => tx.type === 'expense'), [cashTransactions]);
+
+  type TableRow =
+    | { kind: 'sale'; data: Sale; sortDate: number }
+    | { kind: 'expense'; data: any; sortDate: number };
+
+  const combinedRows: TableRow[] = useMemo(() => {
+    const rows: TableRow[] = [];
+    filteredSales.forEach((sale) => {
+      rows.push({ kind: 'sale', data: sale, sortDate: new Date((sale as any).created_at).getTime() });
+    });
+    expenses.forEach((tx) => {
+      rows.push({ kind: 'expense', data: tx, sortDate: new Date(tx.created_at).getTime() });
+    });
+    rows.sort((a, b) => b.sortDate - a.sortDate);
+    return rows;
+  }, [filteredSales, expenses]);
+
   const totalSales = filteredSales.reduce((sum, s: any) => sum + Number(s.total), 0);
+  const totalExpenses = expenses.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
   const totalItems = filteredSales.reduce((sum, s: any) => {
     const items = Array.isArray(s.items) ? s.items : [];
     return sum + items.reduce((itemSum: number, item: any) => itemSum + item.quantity, 0);
@@ -831,7 +850,7 @@ export default function Reportes() {
         <div className="text-center py-8">Cargando...</div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 text-white shadow-lg">
               <div className="flex items-center justify-between">
                 <div>
@@ -842,20 +861,30 @@ export default function Reportes() {
               </div>
             </div>
 
+            <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl p-6 text-white shadow-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-red-100 text-sm">Total Egresos</p>
+                  <p className="text-3xl font-bold mt-2">-${totalExpenses.toFixed(2)}</p>
+                </div>
+                <TrendingUp className="opacity-80 rotate-180" size={40} />
+              </div>
+            </div>
+
             <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl p-6 text-white shadow-lg">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-emerald-100 text-sm">Cantidad</p>
-                  <p className="text-3xl font-bold mt-2">{filteredSales.length}</p>
+                  <p className="text-emerald-100 text-sm">Neto</p>
+                  <p className="text-3xl font-bold mt-2">${(totalSales - totalExpenses).toFixed(2)}</p>
                 </div>
                 <ShoppingBag className="opacity-80" size={40} />
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl p-6 text-white shadow-lg">
+            <div className="bg-gradient-to-br from-slate-600 to-slate-700 rounded-xl p-6 text-white shadow-lg">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-purple-100 text-sm">Ticket Promedio</p>
+                  <p className="text-slate-300 text-sm">Ticket Promedio</p>
                   <p className="text-3xl font-bold mt-2">${avgTicket.toFixed(2)}</p>
                 </div>
                 <TrendingUp className="opacity-80" size={40} />
@@ -890,40 +919,68 @@ export default function Reportes() {
               <table className="w-full">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Número</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Tipo</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Numero / Detalle</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Fecha</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Usuario</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Items</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Método</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Metodo</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Total</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-slate-200">
-                  {filteredSales.map((sale: any) => {
-                    const items = Array.isArray(sale.items) ? sale.items : [];
-                    const itemCount = items.reduce((sum: number, item: any) => sum + item.quantity, 0);
+                  {combinedRows.map((row, idx) => {
+                    if (row.kind === 'sale') {
+                      const sale = row.data as any;
+                      const items = Array.isArray(sale.items) ? sale.items : [];
+                      const itemCount = items.reduce((sum: number, item: any) => sum + item.quantity, 0);
 
+                      return (
+                        <tr key={`sale-${sale.id}`} className="hover:bg-slate-50">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+                              Ingreso
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">{sale.sale_number}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{new Date(sale.created_at).toLocaleString('es-AR')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{sale.user_name}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{itemCount}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 capitalize">{sale.payment_method}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-emerald-700">${Number(sale.total).toFixed(2)}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            <button onClick={() => setSelectedSale(sale)} className="text-blue-600 hover:text-blue-800 font-medium">
+                              Ver
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    const tx = row.data;
+                    const desc = tx.description || tx.category || 'Gasto';
                     return (
-                      <tr key={sale.id} className="hover:bg-slate-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">{sale.sale_number}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{new Date(sale.created_at).toLocaleString('es-AR')}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{sale.user_name}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{itemCount}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 capitalize">{sale.payment_method}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">${Number(sale.total).toFixed(2)}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">
-                          <button onClick={() => setSelectedSale(sale)} className="text-blue-600 hover:text-blue-800 font-medium">
-                            Ver
-                          </button>
+                      <tr key={`exp-${tx.id || idx}`} className="hover:bg-red-50 bg-red-50/30">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                            Egreso
+                          </span>
                         </td>
+                        <td className="px-6 py-4 text-sm text-slate-900 max-w-[200px] truncate" title={desc}>{tx.category || 'Gasto'} - {desc}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{new Date(tx.created_at).toLocaleString('es-AR')}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">-</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">-</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 capitalize">{tx.payment_method || 'efectivo'}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">-${Number(tx.amount).toFixed(2)}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-400">-</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              {filteredSales.length === 0 && (
-                <div className="text-center py-8 text-slate-500">No hay ventas para mostrar con los filtros aplicados</div>
+              {combinedRows.length === 0 && (
+                <div className="text-center py-8 text-slate-500">No hay datos para mostrar con los filtros aplicados</div>
               )}
             </div>
           </div>
