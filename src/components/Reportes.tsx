@@ -304,18 +304,19 @@ export default function Reportes() {
       'Expensa',
     ];
 
-    const rows: (string | number)[][] = [];
+    const sortedRows: { sortTime: number; columns: (string | number)[] }[] = [];
 
     filteredSales.forEach((sale) => {
       const items = Array.isArray((sale as any).items) ? (sale as any).items : [];
       const cliente = (sale as any).customer_name || (sale as any).customer || 'Cliente general';
       const lote = (sale as any).customer_lot || '';
+      const sortTime = new Date((sale as any).created_at).getTime();
 
       const breakdown = getPaymentBreakdownForSale(sale);
       const metodoLabel = buildMethodLabel(breakdown, (sale as any).payment_method);
 
       if (items.length === 0) {
-        rows.push([
+        sortedRows.push({ sortTime, columns: [
           formatDate((sale as any).created_at),
           formatTime((sale as any).created_at),
           'Kiosco',
@@ -334,12 +335,12 @@ export default function Reportes() {
           formatNumber(breakdown.transferencia),
           formatNumber(breakdown.qr),
           formatNumber(breakdown.expensa),
-        ]);
+        ]});
       } else {
         items.forEach((item: any, index: number) => {
           const isFirst = index === 0;
 
-          rows.push([
+          sortedRows.push({ sortTime: sortTime - index, columns: [
             formatDate((sale as any).created_at),
             formatTime((sale as any).created_at),
             'Kiosco',
@@ -358,18 +359,19 @@ export default function Reportes() {
             isFirst ? formatNumber(breakdown.transferencia) : '',
             isFirst ? formatNumber(breakdown.qr) : '',
             isFirst ? formatNumber(breakdown.expensa) : '',
-          ]);
+          ]});
         });
       }
     });
 
-    const expenses = cashTransactions.filter((tx) => tx.type === 'expense');
+    const csvExpenses = cashTransactions.filter((tx) => tx.type === 'expense');
 
-    expenses.forEach((tx) => {
+    csvExpenses.forEach((tx) => {
       const amount = Number(tx.amount) || 0;
       const metodo = String(tx.payment_method || '');
       const desc = tx.description || tx.category || 'Gasto';
       const lower = metodo.toLowerCase();
+      const sortTime = new Date(tx.created_at).getTime();
 
       let efectivo = '';
       let transferencia = '';
@@ -384,15 +386,15 @@ export default function Reportes() {
       else if (lower === 'expensas' || lower === 'expensa') expensa = neg;
       else efectivo = neg;
 
-      rows.push([
+      sortedRows.push({ sortTime, columns: [
         formatDate(tx.created_at),
         formatTime(tx.created_at),
-        'Gasto',
+        'Egreso',
         '',
         '',
         '',
         '',
-        'Kiosco',
+        '',
         `EGRESO - ${desc}`,
         1,
         neg,
@@ -403,8 +405,11 @@ export default function Reportes() {
         transferencia,
         qr,
         expensa,
-      ]);
+      ]});
     });
+
+    sortedRows.sort((a, b) => b.sortTime - a.sortTime);
+    const rows = sortedRows.map((r) => r.columns);
 
     const csvContent = [
       headers.join(','),
