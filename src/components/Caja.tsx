@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase, Shift, CashTransaction, Sale } from '../lib/supabase';
-import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, ShoppingCart } from 'lucide-react';
+import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, ShoppingCart, Table, Share2, Printer } from 'lucide-react';
 
 interface CajaProps {
   shift: Shift | null;
@@ -18,6 +18,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
   const [dateFilter, setDateFilter] = useState('all');
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
+  const [showResumenDiario, setShowResumenDiario] = useState(false);
   const [formData, setFormData] = useState({
     type: 'income' as 'income' | 'expense',
     category: '',
@@ -252,6 +253,196 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     .reduce((sum, t) => sum + Number(t.amount), 0);
   const cuentaCorrienteInBox = cuentaCorrienteDeuda - cuentaCorrientePagos;
 
+  const formatDateOnly = (iso: string) => {
+    const d = new Date(iso);
+    const argDate = new Date(d.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+    return argDate.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
+
+  type DaySummary = {
+    date: string;
+    ingresoEfectivo: number;
+    ingresoTransferencia: number;
+    ingresoQr: number;
+    egresoEfectivo: number;
+    egresoTransferencia: number;
+    egresoQr: number;
+    totalDiario: number;
+  };
+
+  const dailySummary: DaySummary[] = useMemo(() => {
+    const map = new Map<string, Omit<DaySummary, 'date'>>();
+
+    const empty = (): Omit<DaySummary, 'date'> => ({
+      ingresoEfectivo: 0,
+      ingresoTransferencia: 0,
+      ingresoQr: 0,
+      egresoEfectivo: 0,
+      egresoTransferencia: 0,
+      egresoQr: 0,
+      totalDiario: 0,
+    });
+
+    transactions.forEach((t) => {
+      const date = formatDateOnly(t.created_at);
+      const prev = map.get(date) || empty();
+      const amount = Number(t.amount) || 0;
+      const method = (t.payment_method || '').toLowerCase();
+
+      if (t.type === 'income') {
+        if (method === 'efectivo') prev.ingresoEfectivo += amount;
+        else if (method === 'transferencia') prev.ingresoTransferencia += amount;
+        else if (method === 'qr') prev.ingresoQr += amount;
+        prev.totalDiario += amount;
+      } else {
+        if (method === 'efectivo') prev.egresoEfectivo += amount;
+        else if (method === 'transferencia') prev.egresoTransferencia += amount;
+        else if (method === 'qr') prev.egresoQr += amount;
+        prev.totalDiario -= amount;
+      }
+
+      map.set(date, prev);
+    });
+
+    const rows: DaySummary[] = Array.from(map.entries()).map(([date, totals]) => ({ date, ...totals }));
+    rows.sort((a, b) => {
+      const [ad, am, ay] = a.date.split('/').map(Number);
+      const [bd, bm, by] = b.date.split('/').map(Number);
+      return new Date(ay, am - 1, ad).getTime() - new Date(by, bm - 1, bd).getTime();
+    });
+    return rows;
+  }, [transactions]);
+
+  const dailySummaryTotals = useMemo(() => {
+    return dailySummary.reduce(
+      (acc, r) => {
+        acc.ingresoEfectivo += r.ingresoEfectivo;
+        acc.ingresoTransferencia += r.ingresoTransferencia;
+        acc.ingresoQr += r.ingresoQr;
+        acc.egresoEfectivo += r.egresoEfectivo;
+        acc.egresoTransferencia += r.egresoTransferencia;
+        acc.egresoQr += r.egresoQr;
+        acc.totalDiario += r.totalDiario;
+        return acc;
+      },
+      { ingresoEfectivo: 0, ingresoTransferencia: 0, ingresoQr: 0, egresoEfectivo: 0, egresoTransferencia: 0, egresoQr: 0, totalDiario: 0 }
+    );
+  }, [dailySummary]);
+
+  const exportResumenCSV = () => {
+    const fmt = (n: number) => n.toFixed(2).replace('.', ',');
+    const headers = ['Fecha', 'Ing. Efectivo', 'Ing. Transferencia', 'Ing. QR', 'Egr. Efectivo', 'Egr. Transferencia', 'Egr. QR', 'Total Diario'];
+
+    const dataRows = dailySummary.map((r) => [
+      r.date,
+      fmt(r.ingresoEfectivo),
+      fmt(r.ingresoTransferencia),
+      fmt(r.ingresoQr),
+      fmt(-r.egresoEfectivo),
+      fmt(-r.egresoTransferencia),
+      fmt(-r.egresoQr),
+      fmt(r.totalDiario),
+    ]);
+
+    dataRows.push([
+      'TOTAL',
+      fmt(dailySummaryTotals.ingresoEfectivo),
+      fmt(dailySummaryTotals.ingresoTransferencia),
+      fmt(dailySummaryTotals.ingresoQr),
+      fmt(-dailySummaryTotals.egresoEfectivo),
+      fmt(-dailySummaryTotals.egresoTransferencia),
+      fmt(-dailySummaryTotals.egresoQr),
+      fmt(dailySummaryTotals.totalDiario),
+    ]);
+
+    const csv = [headers.join(','), ...dataRows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `resumen_diario_caja_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+  };
+
+  const shareResumenDiario = async () => {
+    const fmt = (n: number) => n.toFixed(2);
+    const lines = [
+      'Resumen Diario de Caja',
+      '',
+      'Fecha | Ing.Efvo | Ing.Transf | Ing.QR | Egr.Efvo | Egr.Transf | Egr.QR | Total',
+      ...dailySummary.map(
+        (r) =>
+          `${r.date} | ${fmt(r.ingresoEfectivo)} | ${fmt(r.ingresoTransferencia)} | ${fmt(r.ingresoQr)} | -${fmt(r.egresoEfectivo)} | -${fmt(r.egresoTransferencia)} | -${fmt(r.egresoQr)} | ${fmt(r.totalDiario)}`
+      ),
+      `TOTAL | ${fmt(dailySummaryTotals.ingresoEfectivo)} | ${fmt(dailySummaryTotals.ingresoTransferencia)} | ${fmt(dailySummaryTotals.ingresoQr)} | -${fmt(dailySummaryTotals.egresoEfectivo)} | -${fmt(dailySummaryTotals.egresoTransferencia)} | -${fmt(dailySummaryTotals.egresoQr)} | ${fmt(dailySummaryTotals.totalDiario)}`,
+    ];
+    const text = lines.join('\n');
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Resumen Diario Caja', text });
+      } else {
+        await navigator.clipboard.writeText(text);
+        alert('Resumen copiado al portapapeles');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const printResumenDiario = () => {
+    const w = window.open('', '', 'height=650,width=980');
+    if (!w) return;
+    const fmt = (n: number) => `$${n.toFixed(2)}`;
+
+    const rowsHtml = dailySummary
+      .map(
+        (r) => `<tr>
+          <td>${r.date}</td>
+          <td>${fmt(r.ingresoEfectivo)}</td>
+          <td>${fmt(r.ingresoTransferencia)}</td>
+          <td>${fmt(r.ingresoQr)}</td>
+          <td class="egr">${r.egresoEfectivo > 0 ? `-${fmt(r.egresoEfectivo)}` : fmt(0)}</td>
+          <td class="egr">${r.egresoTransferencia > 0 ? `-${fmt(r.egresoTransferencia)}` : fmt(0)}</td>
+          <td class="egr">${r.egresoQr > 0 ? `-${fmt(r.egresoQr)}` : fmt(0)}</td>
+          <td class="total">${fmt(r.totalDiario)}</td>
+        </tr>`
+      )
+      .join('');
+
+    w.document.write(`<html><head><title>Resumen Diario Caja</title>
+      <style>
+        body{font-family:Arial,sans-serif;padding:20px}
+        h1{text-align:center;color:#111827;margin-bottom:4px}
+        p{text-align:center;color:#6b7280;margin-top:0}
+        table{width:100%;border-collapse:collapse;margin-top:16px}
+        th,td{border:1px solid #e5e7eb;padding:8px;font-size:13px}
+        th{background:#f3f4f6;text-align:left}
+        td{text-align:right}
+        td:first-child{text-align:left}
+        .egr{color:#dc2626}
+        .total{font-weight:bold}
+        tr.totals td{background:#fef9c3;font-weight:bold}
+      </style></head><body>
+      <h1>Resumen Diario de Caja</h1>
+      <table><thead><tr>
+        <th>Fecha</th><th>Ing. Efectivo</th><th>Ing. Transferencia</th><th>Ing. QR</th>
+        <th>Egr. Efectivo</th><th>Egr. Transferencia</th><th>Egr. QR</th><th>Total Diario</th>
+      </tr></thead><tbody>
+        ${rowsHtml}
+        <tr class="totals">
+          <td>TOTAL</td>
+          <td>${fmt(dailySummaryTotals.ingresoEfectivo)}</td>
+          <td>${fmt(dailySummaryTotals.ingresoTransferencia)}</td>
+          <td>${fmt(dailySummaryTotals.ingresoQr)}</td>
+          <td class="egr">${dailySummaryTotals.egresoEfectivo > 0 ? `-${fmt(dailySummaryTotals.egresoEfectivo)}` : fmt(0)}</td>
+          <td class="egr">${dailySummaryTotals.egresoTransferencia > 0 ? `-${fmt(dailySummaryTotals.egresoTransferencia)}` : fmt(0)}</td>
+          <td class="egr">${dailySummaryTotals.egresoQr > 0 ? `-${fmt(dailySummaryTotals.egresoQr)}` : fmt(0)}</td>
+          <td class="total">${fmt(dailySummaryTotals.totalDiario)}</td>
+        </tr>
+      </tbody></table></body></html>`);
+    w.document.close();
+    w.print();
+  };
+
   if (!shift) {
     return (
       <div className="text-center py-12">
@@ -361,6 +552,13 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
           <h3 className="text-xl font-bold text-slate-800">Movimientos de Caja</h3>
           <div className="flex gap-2 flex-wrap">
             <button
+              onClick={() => setShowResumenDiario(true)}
+              className="bg-gradient-to-r from-slate-700 to-slate-900 hover:from-slate-800 hover:to-black text-white px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-lg transition-all"
+            >
+              <Table size={18} />
+              Resumen Diario
+            </button>
+            <button
               onClick={exportToCSV}
               className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-lg transition-all"
             >
@@ -369,7 +567,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
             </button>
             <button
               onClick={() => setShowModal(true)}
-              className="bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700 text-white px-6 py-2.5 rounded-xl flex items-center gap-2 shadow-lg transition-all"
+              className="bg-gradient-to-r from-blue-500 to-cyan-600 hover:from-blue-600 hover:to-cyan-700 text-white px-6 py-2.5 rounded-xl flex items-center gap-2 shadow-lg transition-all"
             >
               <Plus size={20} />
               Nuevo Movimiento
@@ -834,6 +1032,108 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
                   )}
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showResumenDiario && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex items-center justify-between z-10">
+              <h3 className="text-xl font-bold text-slate-800">Resumen Diario de Caja</h3>
+              <button onClick={() => setShowResumenDiario(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={24} />
+              </button>
+            </div>
+            <div className="p-6">
+              <div className="flex flex-wrap gap-2 mb-4">
+                <button
+                  onClick={printResumenDiario}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center gap-2"
+                >
+                  <Printer size={18} />
+                  Imprimir
+                </button>
+                <button
+                  onClick={shareResumenDiario}
+                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg flex items-center gap-2"
+                >
+                  <Share2 size={18} />
+                  Compartir
+                </button>
+                <button
+                  onClick={exportResumenCSV}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center gap-2"
+                >
+                  <Download size={18} />
+                  Exportar CSV
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border rounded-lg">
+                <table className="w-full">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Fecha</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-emerald-700 uppercase">Ing. Efectivo</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-emerald-700 uppercase">Ing. Transferencia</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-emerald-700 uppercase">Ing. QR</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-red-700 uppercase">Egr. Efectivo</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-red-700 uppercase">Egr. Transferencia</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-red-700 uppercase">Egr. QR</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-800 uppercase">Total Diario</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {dailySummary.map((r) => (
+                      <tr key={r.date} className="hover:bg-slate-50">
+                        <td className="px-4 py-2 text-sm text-slate-800 font-medium">{r.date}</td>
+                        <td className="px-4 py-2 text-sm text-right text-emerald-700">${r.ingresoEfectivo.toFixed(2)}</td>
+                        <td className="px-4 py-2 text-sm text-right text-emerald-700">${r.ingresoTransferencia.toFixed(2)}</td>
+                        <td className="px-4 py-2 text-sm text-right text-emerald-700">${r.ingresoQr.toFixed(2)}</td>
+                        <td className="px-4 py-2 text-sm text-right text-red-600">
+                          {r.egresoEfectivo > 0 ? `-$${r.egresoEfectivo.toFixed(2)}` : '$0.00'}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right text-red-600">
+                          {r.egresoTransferencia > 0 ? `-$${r.egresoTransferencia.toFixed(2)}` : '$0.00'}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right text-red-600">
+                          {r.egresoQr > 0 ? `-$${r.egresoQr.toFixed(2)}` : '$0.00'}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-right font-bold">
+                          <span className={r.totalDiario >= 0 ? 'text-emerald-700' : 'text-red-600'}>
+                            ${r.totalDiario.toFixed(2)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="bg-yellow-50">
+                      <td className="px-4 py-2 text-sm font-bold">TOTAL</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-emerald-700">${dailySummaryTotals.ingresoEfectivo.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-emerald-700">${dailySummaryTotals.ingresoTransferencia.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-emerald-700">${dailySummaryTotals.ingresoQr.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-red-600">
+                        {dailySummaryTotals.egresoEfectivo > 0 ? `-$${dailySummaryTotals.egresoEfectivo.toFixed(2)}` : '$0.00'}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-red-600">
+                        {dailySummaryTotals.egresoTransferencia > 0 ? `-$${dailySummaryTotals.egresoTransferencia.toFixed(2)}` : '$0.00'}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-red-600">
+                        {dailySummaryTotals.egresoQr > 0 ? `-$${dailySummaryTotals.egresoQr.toFixed(2)}` : '$0.00'}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold">
+                        <span className={dailySummaryTotals.totalDiario >= 0 ? 'text-emerald-700' : 'text-red-600'}>
+                          ${dailySummaryTotals.totalDiario.toFixed(2)}
+                        </span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                {dailySummary.length === 0 && (
+                  <div className="text-center py-8 text-slate-500">No hay datos para el resumen con los filtros aplicados</div>
+                )}
+              </div>
             </div>
           </div>
         </div>
