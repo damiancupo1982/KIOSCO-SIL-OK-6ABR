@@ -331,13 +331,14 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
 
   const exportResumenCSV = () => {
     const fmt = (n: number) => n.toFixed(2).replace('.', ',');
-    const headers = ['Fecha', 'Ing. Efectivo', 'Ing. Transferencia', 'Ing. QR', 'Egr. Efectivo', 'Egr. Transferencia', 'Egr. QR', 'Total Diario'];
+    const headers = ['Fecha', 'Ing. Efectivo', 'Ing. Transferencia', 'Ing. QR', 'Total Ingresos', 'Egr. Efectivo', 'Egr. Transferencia', 'Egr. QR', 'Total Diario'];
 
     const dataRows = dailySummary.map((r) => [
       r.date,
       fmt(r.ingresoEfectivo),
       fmt(r.ingresoTransferencia),
       fmt(r.ingresoQr),
+      fmt(r.ingresoEfectivo + r.ingresoTransferencia + r.ingresoQr),
       fmt(-r.egresoEfectivo),
       fmt(-r.egresoTransferencia),
       fmt(-r.egresoQr),
@@ -349,6 +350,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       fmt(dailySummaryTotals.ingresoEfectivo),
       fmt(dailySummaryTotals.ingresoTransferencia),
       fmt(dailySummaryTotals.ingresoQr),
+      fmt(dailySummaryTotals.ingresoEfectivo + dailySummaryTotals.ingresoTransferencia + dailySummaryTotals.ingresoQr),
       fmt(-dailySummaryTotals.egresoEfectivo),
       fmt(-dailySummaryTotals.egresoTransferencia),
       fmt(-dailySummaryTotals.egresoQr),
@@ -368,12 +370,12 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     const lines = [
       'Resumen Diario de Caja',
       '',
-      'Fecha | Ing.Efvo | Ing.Transf | Ing.QR | Egr.Efvo | Egr.Transf | Egr.QR | Total',
+      'Fecha | Ing.Efvo | Ing.Transf | Ing.QR | Tot.Ing | Egr.Efvo | Egr.Transf | Egr.QR | Total',
       ...dailySummary.map(
         (r) =>
-          `${r.date} | ${fmt(r.ingresoEfectivo)} | ${fmt(r.ingresoTransferencia)} | ${fmt(r.ingresoQr)} | -${fmt(r.egresoEfectivo)} | -${fmt(r.egresoTransferencia)} | -${fmt(r.egresoQr)} | ${fmt(r.totalDiario)}`
+          `${r.date} | ${fmt(r.ingresoEfectivo)} | ${fmt(r.ingresoTransferencia)} | ${fmt(r.ingresoQr)} | ${fmt(r.ingresoEfectivo + r.ingresoTransferencia + r.ingresoQr)} | -${fmt(r.egresoEfectivo)} | -${fmt(r.egresoTransferencia)} | -${fmt(r.egresoQr)} | ${fmt(r.totalDiario)}`
       ),
-      `TOTAL | ${fmt(dailySummaryTotals.ingresoEfectivo)} | ${fmt(dailySummaryTotals.ingresoTransferencia)} | ${fmt(dailySummaryTotals.ingresoQr)} | -${fmt(dailySummaryTotals.egresoEfectivo)} | -${fmt(dailySummaryTotals.egresoTransferencia)} | -${fmt(dailySummaryTotals.egresoQr)} | ${fmt(dailySummaryTotals.totalDiario)}`,
+      `TOTAL | ${fmt(dailySummaryTotals.ingresoEfectivo)} | ${fmt(dailySummaryTotals.ingresoTransferencia)} | ${fmt(dailySummaryTotals.ingresoQr)} | ${fmt(dailySummaryTotals.ingresoEfectivo + dailySummaryTotals.ingresoTransferencia + dailySummaryTotals.ingresoQr)} | -${fmt(dailySummaryTotals.egresoEfectivo)} | -${fmt(dailySummaryTotals.egresoTransferencia)} | -${fmt(dailySummaryTotals.egresoQr)} | ${fmt(dailySummaryTotals.totalDiario)}`,
     ];
     const text = lines.join('\n');
     try {
@@ -400,6 +402,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
           <td>${fmt(r.ingresoEfectivo)}</td>
           <td>${fmt(r.ingresoTransferencia)}</td>
           <td>${fmt(r.ingresoQr)}</td>
+          <td class="tot-ing">${fmt(r.ingresoEfectivo + r.ingresoTransferencia + r.ingresoQr)}</td>
           <td class="egr">${r.egresoEfectivo > 0 ? `-${fmt(r.egresoEfectivo)}` : fmt(0)}</td>
           <td class="egr">${r.egresoTransferencia > 0 ? `-${fmt(r.egresoTransferencia)}` : fmt(0)}</td>
           <td class="egr">${r.egresoQr > 0 ? `-${fmt(r.egresoQr)}` : fmt(0)}</td>
@@ -419,12 +422,13 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
         td{text-align:right}
         td:first-child{text-align:left}
         .egr{color:#dc2626}
+        .tot-ing{font-weight:bold;color:#047857;background:#ecfdf5}
         .total{font-weight:bold}
         tr.totals td{background:#fef9c3;font-weight:bold}
       </style></head><body>
       <h1>Resumen Diario de Caja</h1>
       <table><thead><tr>
-        <th>Fecha</th><th>Ing. Efectivo</th><th>Ing. Transferencia</th><th>Ing. QR</th>
+        <th>Fecha</th><th>Ing. Efectivo</th><th>Ing. Transferencia</th><th>Ing. QR</th><th>Total Ingresos</th>
         <th>Egr. Efectivo</th><th>Egr. Transferencia</th><th>Egr. QR</th><th>Total Diario</th>
       </tr></thead><tbody>
         ${rowsHtml}
@@ -433,6 +437,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
           <td>${fmt(dailySummaryTotals.ingresoEfectivo)}</td>
           <td>${fmt(dailySummaryTotals.ingresoTransferencia)}</td>
           <td>${fmt(dailySummaryTotals.ingresoQr)}</td>
+          <td class="tot-ing">${fmt(dailySummaryTotals.ingresoEfectivo + dailySummaryTotals.ingresoTransferencia + dailySummaryTotals.ingresoQr)}</td>
           <td class="egr">${dailySummaryTotals.egresoEfectivo > 0 ? `-${fmt(dailySummaryTotals.egresoEfectivo)}` : fmt(0)}</td>
           <td class="egr">${dailySummaryTotals.egresoTransferencia > 0 ? `-${fmt(dailySummaryTotals.egresoTransferencia)}` : fmt(0)}</td>
           <td class="egr">${dailySummaryTotals.egresoQr > 0 ? `-${fmt(dailySummaryTotals.egresoQr)}` : fmt(0)}</td>
@@ -1079,6 +1084,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
                       <th className="px-4 py-2 text-right text-xs font-semibold text-emerald-700 uppercase">Ing. Efectivo</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-emerald-700 uppercase">Ing. Transferencia</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-emerald-700 uppercase">Ing. QR</th>
+                      <th className="px-4 py-2 text-right text-xs font-bold text-emerald-800 uppercase bg-emerald-50">Total Ingresos</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-red-700 uppercase">Egr. Efectivo</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-red-700 uppercase">Egr. Transferencia</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-red-700 uppercase">Egr. QR</th>
@@ -1092,6 +1098,9 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
                         <td className="px-4 py-2 text-sm text-right text-emerald-700">${r.ingresoEfectivo.toFixed(2)}</td>
                         <td className="px-4 py-2 text-sm text-right text-emerald-700">${r.ingresoTransferencia.toFixed(2)}</td>
                         <td className="px-4 py-2 text-sm text-right text-emerald-700">${r.ingresoQr.toFixed(2)}</td>
+                        <td className="px-4 py-2 text-sm text-right font-bold text-emerald-800 bg-emerald-50">
+                          ${(r.ingresoEfectivo + r.ingresoTransferencia + r.ingresoQr).toFixed(2)}
+                        </td>
                         <td className="px-4 py-2 text-sm text-right text-red-600">
                           {r.egresoEfectivo > 0 ? `-$${r.egresoEfectivo.toFixed(2)}` : '$0.00'}
                         </td>
@@ -1113,6 +1122,9 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
                       <td className="px-4 py-2 text-sm text-right font-bold text-emerald-700">${dailySummaryTotals.ingresoEfectivo.toFixed(2)}</td>
                       <td className="px-4 py-2 text-sm text-right font-bold text-emerald-700">${dailySummaryTotals.ingresoTransferencia.toFixed(2)}</td>
                       <td className="px-4 py-2 text-sm text-right font-bold text-emerald-700">${dailySummaryTotals.ingresoQr.toFixed(2)}</td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-emerald-800 bg-emerald-100">
+                        ${(dailySummaryTotals.ingresoEfectivo + dailySummaryTotals.ingresoTransferencia + dailySummaryTotals.ingresoQr).toFixed(2)}
+                      </td>
                       <td className="px-4 py-2 text-sm text-right font-bold text-red-600">
                         {dailySummaryTotals.egresoEfectivo > 0 ? `-$${dailySummaryTotals.egresoEfectivo.toFixed(2)}` : '$0.00'}
                       </td>
