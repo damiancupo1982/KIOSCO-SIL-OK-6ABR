@@ -454,6 +454,40 @@ export default function Socios() {
     else { navigator.clipboard.writeText(lines.join('\n')); alert('Copiado al portapapeles'); }
   };
 
+  // Statistics cards data
+  const stats = useMemo(() => {
+    const allLots = new Map<string, Socio[]>();
+    socios.forEach(s => {
+      const key = `${s.barrio_id}-${s.lot_number}`;
+      const arr = allLots.get(key) || [];
+      arr.push(s);
+      allLots.set(key, arr);
+    });
+
+    let totalCarnets = 0;
+    let carnetIndividual = 0;
+    let carnetFamiliar = 0;
+    let totalLiquidar = 0;
+
+    allLots.forEach(lotSocios => {
+      const active = lotSocios.filter(s => s.carnet_status === 'activo');
+      const hasTitular = active.some(s => s.category === 'titular');
+      if (!hasTitular) return;
+
+      totalCarnets++;
+      const hasFamily = active.some(s =>
+        s.category === 'familiar_1' || s.category === 'familiar_2' || s.category === 'familiar_3'
+      );
+      if (hasFamily) carnetFamiliar++;
+      else carnetIndividual++;
+
+      const calc = calcLotCostDetailed(lotSocios);
+      totalLiquidar += calc.total_final;
+    });
+
+    return { totalSocios: socios.length, totalCarnets, carnetIndividual, carnetFamiliar, totalLiquidar };
+  }, [socios, prices]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -464,6 +498,30 @@ export default function Socios() {
 
   return (
     <div className="space-y-4">
+      {/* Stats cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <div className="bg-white rounded-xl p-3 shadow border border-slate-200">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Socios Totales</p>
+          <p className="text-2xl font-bold text-slate-800 mt-1">{stats.totalSocios}</p>
+        </div>
+        <div className="bg-white rounded-xl p-3 shadow border border-slate-200">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Carnets Totales</p>
+          <p className="text-2xl font-bold text-teal-700 mt-1">{stats.totalCarnets}</p>
+        </div>
+        <div className="bg-white rounded-xl p-3 shadow border border-slate-200">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Carnet Individual</p>
+          <p className="text-2xl font-bold text-blue-700 mt-1">{stats.carnetIndividual}</p>
+        </div>
+        <div className="bg-white rounded-xl p-3 shadow border border-slate-200">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Carnet Familiar</p>
+          <p className="text-2xl font-bold text-cyan-700 mt-1">{stats.carnetFamiliar}</p>
+        </div>
+        <div className="bg-white rounded-xl p-3 shadow border border-amber-200">
+          <p className="text-xs font-semibold text-amber-600 uppercase tracking-wide">Total $ a Liquidar</p>
+          <p className="text-2xl font-bold text-amber-700 mt-1">${stats.totalLiquidar.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
+        </div>
+      </div>
+
       {/* Top bar */}
       <div className="flex flex-wrap items-center gap-3">
         <button onClick={openAddModal} className="flex items-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-medium transition-colors text-sm">
