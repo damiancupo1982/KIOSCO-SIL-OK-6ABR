@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag } from 'lucide-react';
+import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag, UserCheck } from 'lucide-react';
 import { Shift, supabase, CashTransaction } from '../lib/supabase';
 import Ventas from './Ventas';
 import Stock from './Stock';
@@ -9,8 +9,9 @@ import Configuracion from './Configuracion';
 import Movimientos from './Movimientos';
 import CuentaCorriente from './CuentaCorriente';
 import Compras from './Compras';
+import Socios from './Socios';
 
-type View = 'ventas' | 'stock' | 'caja' | 'reportes' | 'configuracion' | 'movimientos' | 'cuentacorriente' | 'compras';
+type View = 'ventas' | 'stock' | 'caja' | 'reportes' | 'configuracion' | 'movimientos' | 'cuentacorriente' | 'compras' | 'socios';
 
 interface DashboardProps {
   shift: Shift | null;
@@ -244,6 +245,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
     { id: 'caja' as View, label: 'Caja', icon: Wallet, color: 'from-slate-600 to-slate-700' },
     { id: 'cuentacorriente' as View, label: 'Cta. Corriente', icon: BookOpen, color: 'from-amber-500 to-orange-600' },
     { id: 'compras' as View, label: 'Compras', icon: ShoppingBag, color: 'from-indigo-500 to-purple-600' },
+    { id: 'socios' as View, label: 'Socios', icon: UserCheck, color: 'from-teal-500 to-cyan-600' },
     { id: 'reportes' as View, label: 'Reportes', icon: BarChart3, color: 'from-orange-500 to-red-600' },
     { id: 'configuracion' as View, label: 'Configuración', icon: Settings, color: 'from-gray-500 to-slate-600' },
   ];
@@ -463,6 +465,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
                 {currentView === 'caja' && <Caja shift={shift} onCloseShift={onCloseShift} />}
                 {currentView === 'cuentacorriente' && <CuentaCorriente shift={shift} />}
                 {currentView === 'compras' && <Compras shift={shift} />}
+                {currentView === 'socios' && <Socios />}
                 {currentView === 'reportes' && <Reportes />}
                 {currentView === 'configuracion' && <Configuracion />}
               </div>
