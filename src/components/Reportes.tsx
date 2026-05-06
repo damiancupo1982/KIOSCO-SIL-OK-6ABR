@@ -91,6 +91,14 @@ export default function Reportes() {
       const from = daysAgo30.toISOString();
       salesQuery = salesQuery.gte('created_at', from);
       cashQuery = cashQuery.gte('created_at', from);
+    } else if (dateFilter === 'prev_month') {
+      const now = new Date();
+      const firstDayPrevMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0));
+      const lastDayPrevMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999));
+      const fromIso = firstDayPrevMonth.toISOString();
+      const toIso = lastDayPrevMonth.toISOString();
+      salesQuery = salesQuery.gte('created_at', fromIso).lte('created_at', toIso);
+      cashQuery = cashQuery.gte('created_at', fromIso).lte('created_at', toIso);
     } else if (dateFilter === 'custom' && customDateFrom && customDateTo) {
       const [fy, fm, fd] = customDateFrom.split('-').map(Number);
       const [ty, tm, td] = customDateTo.split('-').map(Number);
@@ -532,6 +540,8 @@ export default function Reportes() {
               ? 'Última Semana'
               : dateFilter === 'month'
               ? 'Último Mes'
+              : dateFilter === 'prev_month'
+              ? 'Mes Anterior'
               : dateFilter === 'custom'
               ? 'Rango Personalizado'
               : 'Todo'
@@ -633,6 +643,8 @@ export default function Reportes() {
               ? 'Última Semana'
               : dateFilter === 'month'
               ? 'Último Mes'
+              : dateFilter === 'prev_month'
+              ? 'Mes Anterior'
               : dateFilter === 'custom'
               ? 'Rango Personalizado'
               : 'Todo'
@@ -822,6 +834,7 @@ export default function Reportes() {
             <option value="today">Hoy</option>
             <option value="week">Última Semana</option>
             <option value="month">Último Mes</option>
+            <option value="prev_month">Mes Anterior</option>
             <option value="custom">Rango Personalizado</option>
             <option value="all">Todo</option>
           </select>
