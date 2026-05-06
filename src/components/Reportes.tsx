@@ -24,7 +24,19 @@ type DailySummaryRow = {
   egresos_transferencia: number;
   egresos_qr: number;
   egresos_expensa: number;
+  movimientos: number;
+  movimientos_efectivo: number;
+  movimientos_transferencia: number;
+  movimientos_qr: number;
+  movimientos_expensa: number;
 };
+
+const MOVEMENT_CATEGORIES = ['alivio', 'alivios', 'cierre', 'cierre caja', 'cierre de mes', 'retiro', 'retiro efectivo'];
+
+function isMovementCategory(category: string): boolean {
+  const lower = (category || '').trim().toLowerCase();
+  return MOVEMENT_CATEGORIES.some(mc => lower.includes(mc));
+}
 
 export default function Reportes() {
   const [sales, setSales] = useState<Sale[]>([]);
@@ -206,6 +218,11 @@ export default function Reportes() {
       egresos_transferencia: 0,
       egresos_qr: 0,
       egresos_expensa: 0,
+      movimientos: 0,
+      movimientos_efectivo: 0,
+      movimientos_transferencia: 0,
+      movimientos_qr: 0,
+      movimientos_expensa: 0,
     });
 
     // Ventas
@@ -224,23 +241,32 @@ export default function Reportes() {
       map.set(date, prev);
     });
 
-    // Egresos (desde cash_transactions ya filtrado por fecha en loadData)
+    // Egresos y Movimientos (desde cash_transactions ya filtrado por fecha en loadData)
     cashTransactions
       .filter((tx) => tx.type === 'expense')
       .forEach((tx) => {
         const date = formatDate(tx.created_at);
         const amount = Number(tx.amount) || 0;
         const method = String(tx.payment_method || '').toLowerCase();
+        const isMovement = isMovementCategory(tx.category);
 
         const prev = map.get(date) || emptyDay();
 
-        prev.egresos += amount;
-
-        if (method === 'efectivo') prev.egresos_efectivo += amount;
-        else if (method === 'transferencia') prev.egresos_transferencia += amount;
-        else if (method === 'qr') prev.egresos_qr += amount;
-        else if (method === 'expensas' || method === 'expensa') prev.egresos_expensa += amount;
-        else prev.egresos_efectivo += amount;
+        if (isMovement) {
+          prev.movimientos += amount;
+          if (method === 'efectivo') prev.movimientos_efectivo += amount;
+          else if (method === 'transferencia') prev.movimientos_transferencia += amount;
+          else if (method === 'qr') prev.movimientos_qr += amount;
+          else if (method === 'expensas' || method === 'expensa') prev.movimientos_expensa += amount;
+          else prev.movimientos_efectivo += amount;
+        } else {
+          prev.egresos += amount;
+          if (method === 'efectivo') prev.egresos_efectivo += amount;
+          else if (method === 'transferencia') prev.egresos_transferencia += amount;
+          else if (method === 'qr') prev.egresos_qr += amount;
+          else if (method === 'expensas' || method === 'expensa') prev.egresos_expensa += amount;
+          else prev.egresos_efectivo += amount;
+        }
 
         map.set(date, prev);
       });
@@ -272,9 +298,14 @@ export default function Reportes() {
         acc.egresos_transferencia += row.egresos_transferencia;
         acc.egresos_qr += row.egresos_qr;
         acc.egresos_expensa += row.egresos_expensa;
+        acc.movimientos += row.movimientos;
+        acc.movimientos_efectivo += row.movimientos_efectivo;
+        acc.movimientos_transferencia += row.movimientos_transferencia;
+        acc.movimientos_qr += row.movimientos_qr;
+        acc.movimientos_expensa += row.movimientos_expensa;
         return acc;
       },
-      { efectivo: 0, transferencia: 0, qr: 0, expensa: 0, total: 0, egresos: 0, egresos_efectivo: 0, egresos_transferencia: 0, egresos_qr: 0, egresos_expensa: 0 }
+      { efectivo: 0, transferencia: 0, qr: 0, expensa: 0, total: 0, egresos: 0, egresos_efectivo: 0, egresos_transferencia: 0, egresos_qr: 0, egresos_expensa: 0, movimientos: 0, movimientos_efectivo: 0, movimientos_transferencia: 0, movimientos_qr: 0, movimientos_expensa: 0 }
     );
   }, [dailySummary]);
 
@@ -372,6 +403,9 @@ export default function Reportes() {
       const desc = tx.description || tx.category || 'Gasto';
       const lower = metodo.toLowerCase();
       const sortTime = new Date(tx.created_at).getTime();
+      const isMovement = isMovementCategory(tx.category);
+      const tipoLabel = isMovement ? 'Cta Movimiento' : 'Egreso';
+      const prefixLabel = isMovement ? 'CTA MOV' : 'EGRESO';
 
       let efectivo = '';
       let transferencia = '';
@@ -389,13 +423,13 @@ export default function Reportes() {
       sortedRows.push({ sortTime, columns: [
         formatDate(tx.created_at),
         formatTime(tx.created_at),
-        'Egreso',
+        tipoLabel,
         '',
         '',
         '',
         '',
         '',
-        `EGRESO - ${desc}`,
+        `${prefixLabel} - ${desc}`,
         1,
         neg,
         neg,
@@ -436,7 +470,7 @@ export default function Reportes() {
   };
 
   const printResumen = () => {
-    const w = window.open('', '', 'height=650,width=980');
+    const w = window.open('', '', 'height=650,width=1050');
     if (!w) return;
 
     const fmt = (n: number) => `$${n.toFixed(2)}`;
@@ -451,7 +485,8 @@ export default function Reportes() {
           <td>${fmt(r.qr)}</td>
           <td>${fmt(r.expensa)}</td>
           <td>${fmt(r.total)}</td>
-          <td>${fmt(r.egresos)}</td>
+          <td class="egreso">${r.egresos > 0 ? `-${fmt(r.egresos)}` : '$0.00'}</td>
+          <td class="mov">${r.movimientos > 0 ? fmt(r.movimientos) : '-'}</td>
         </tr>
       `
       )
@@ -465,7 +500,8 @@ export default function Reportes() {
         <td><strong>${fmt(dailySummaryTotals.qr)}</strong></td>
         <td><strong>${fmt(dailySummaryTotals.expensa)}</strong></td>
         <td><strong>${fmt(dailySummaryTotals.total)}</strong></td>
-        <td><strong>${fmt(dailySummaryTotals.egresos)}</strong></td>
+        <td class="egreso"><strong>${dailySummaryTotals.egresos > 0 ? `-${fmt(dailySummaryTotals.egresos)}` : '$0.00'}</strong></td>
+        <td class="mov"><strong>${dailySummaryTotals.movimientos > 0 ? fmt(dailySummaryTotals.movimientos) : '-'}</strong></td>
       </tr>
     `;
 
@@ -483,6 +519,8 @@ export default function Reportes() {
             td { text-align: right; }
             td:first-child { text-align: left; }
             tr.totals td { background: #fef9c3; }
+            .egreso { color: #dc2626; }
+            .mov { color: #b45309; }
           </style>
         </head>
         <body>
@@ -508,6 +546,7 @@ export default function Reportes() {
                 <th>Expensa</th>
                 <th>TOTAL DIA</th>
                 <th>EGRESOS</th>
+                <th>CTA MOV.</th>
               </tr>
             </thead>
             <tbody>
@@ -540,14 +579,14 @@ export default function Reportes() {
             : 'Todo'
         }`,
         '',
-        'FECHA | Efectivo | Transferencia | QR | Expensa | TOTAL DIA | EGRESOS',
+        'FECHA | Efectivo | Transferencia | QR | Expensa | TOTAL DIA | EGRESOS | CTA MOV.',
         ...dailySummary.map(
           (r) =>
-            `${r.date} | ${fmt(r.efectivo)} | ${fmt(r.transferencia)} | ${fmt(r.qr)} | ${fmt(r.expensa)} | ${fmt(r.total)} | ${fmt(r.egresos)}`
+            `${r.date} | ${fmt(r.efectivo)} | ${fmt(r.transferencia)} | ${fmt(r.qr)} | ${fmt(r.expensa)} | ${fmt(r.total)} | ${fmt(r.egresos)} | ${fmt(r.movimientos)}`
         ),
         `TOTAL | ${fmt(dailySummaryTotals.efectivo)} | ${fmt(dailySummaryTotals.transferencia)} | ${fmt(
           dailySummaryTotals.qr
-        )} | ${fmt(dailySummaryTotals.expensa)} | ${fmt(dailySummaryTotals.total)} | ${fmt(dailySummaryTotals.egresos)}`,
+        )} | ${fmt(dailySummaryTotals.expensa)} | ${fmt(dailySummaryTotals.total)} | ${fmt(dailySummaryTotals.egresos)} | ${fmt(dailySummaryTotals.movimientos)}`,
       ];
 
       const text = lines.join('\n');
@@ -733,11 +772,13 @@ export default function Reportes() {
     printWindow.print();
   };
 
-  const expenses = useMemo(() => cashTransactions.filter((tx) => tx.type === 'expense'), [cashTransactions]);
+  const expenses = useMemo(() => cashTransactions.filter((tx) => tx.type === 'expense' && !isMovementCategory(tx.category)), [cashTransactions]);
+  const movements = useMemo(() => cashTransactions.filter((tx) => tx.type === 'expense' && isMovementCategory(tx.category)), [cashTransactions]);
 
   type TableRow =
     | { kind: 'sale'; data: Sale; sortDate: number }
-    | { kind: 'expense'; data: any; sortDate: number };
+    | { kind: 'expense'; data: any; sortDate: number }
+    | { kind: 'movement'; data: any; sortDate: number };
 
   const combinedRows: TableRow[] = useMemo(() => {
     const rows: TableRow[] = [];
@@ -747,12 +788,16 @@ export default function Reportes() {
     expenses.forEach((tx) => {
       rows.push({ kind: 'expense', data: tx, sortDate: new Date(tx.created_at).getTime() });
     });
+    movements.forEach((tx) => {
+      rows.push({ kind: 'movement', data: tx, sortDate: new Date(tx.created_at).getTime() });
+    });
     rows.sort((a, b) => b.sortDate - a.sortDate);
     return rows;
-  }, [filteredSales, expenses]);
+  }, [filteredSales, expenses, movements]);
 
   const totalSales = filteredSales.reduce((sum, s: any) => sum + Number(s.total), 0);
   const totalExpenses = expenses.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+  const totalMovements = movements.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
   const totalItems = filteredSales.reduce((sum, s: any) => {
     const items = Array.isArray(s.items) ? s.items : [];
     return sum + items.reduce((itemSum: number, item: any) => itemSum + item.quantity, 0);
@@ -855,54 +900,46 @@ export default function Reportes() {
         <div className="text-center py-8">Cargando...</div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 text-white shadow-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-blue-100 text-sm">Total Ventas</p>
-                  <p className="text-3xl font-bold mt-2">${totalSales.toFixed(2)}</p>
-                </div>
-                <DollarSign className="opacity-80" size={40} />
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-5 text-white shadow-lg">
+              <div>
+                <p className="text-blue-100 text-xs">Total Ventas</p>
+                <p className="text-2xl font-bold mt-1">${totalSales.toFixed(2)}</p>
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl p-6 text-white shadow-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-red-100 text-sm">Total Egresos</p>
-                  <p className="text-3xl font-bold mt-2">-${totalExpenses.toFixed(2)}</p>
-                </div>
-                <TrendingUp className="opacity-80 rotate-180" size={40} />
+            <div className="bg-gradient-to-br from-red-500 to-red-600 rounded-xl p-5 text-white shadow-lg">
+              <div>
+                <p className="text-red-100 text-xs">Total Egresos</p>
+                <p className="text-2xl font-bold mt-1">-${totalExpenses.toFixed(2)}</p>
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl p-6 text-white shadow-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-emerald-100 text-sm">Neto</p>
-                  <p className="text-3xl font-bold mt-2">${(totalSales - totalExpenses).toFixed(2)}</p>
-                </div>
-                <ShoppingBag className="opacity-80" size={40} />
+            <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl p-5 text-white shadow-lg">
+              <div>
+                <p className="text-amber-100 text-xs">Cta de Movimiento</p>
+                <p className="text-2xl font-bold mt-1">${totalMovements.toFixed(2)}</p>
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-slate-600 to-slate-700 rounded-xl p-6 text-white shadow-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-slate-300 text-sm">Ticket Promedio</p>
-                  <p className="text-3xl font-bold mt-2">${avgTicket.toFixed(2)}</p>
-                </div>
-                <TrendingUp className="opacity-80" size={40} />
+            <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-xl p-5 text-white shadow-lg">
+              <div>
+                <p className="text-emerald-100 text-xs">Neto</p>
+                <p className="text-2xl font-bold mt-1">${(totalSales - totalExpenses).toFixed(2)}</p>
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl p-6 text-white shadow-lg">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-orange-100 text-sm">Items Vendidos</p>
-                  <p className="text-3xl font-bold mt-2">{totalItems}</p>
-                </div>
-                <BarChart3 className="opacity-80" size={40} />
+            <div className="bg-gradient-to-br from-slate-600 to-slate-700 rounded-xl p-5 text-white shadow-lg">
+              <div>
+                <p className="text-slate-300 text-xs">Ticket Promedio</p>
+                <p className="text-2xl font-bold mt-1">${avgTicket.toFixed(2)}</p>
+              </div>
+            </div>
+
+            <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl p-5 text-white shadow-lg">
+              <div>
+                <p className="text-orange-100 text-xs">Items Vendidos</p>
+                <p className="text-2xl font-bold mt-1">{totalItems}</p>
               </div>
             </div>
           </div>
@@ -959,6 +996,27 @@ export default function Reportes() {
                               Ver
                             </button>
                           </td>
+                        </tr>
+                      );
+                    }
+
+                    if (row.kind === 'movement') {
+                      const tx = row.data;
+                      const desc = tx.description || tx.category || 'Movimiento';
+                      return (
+                        <tr key={`mov-${tx.id || idx}`} className="hover:bg-amber-50 bg-amber-50/30">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                              Cta Movimiento
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-sm text-slate-900 max-w-[200px] truncate" title={desc}>{tx.category || 'Movimiento'} - {desc}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{new Date(tx.created_at).toLocaleString('es-AR')}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">-</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">-</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500 capitalize">{tx.payment_method || 'efectivo'}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-amber-700">${Number(tx.amount).toFixed(2)}</td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-400">-</td>
                         </tr>
                       );
                     }
@@ -1028,8 +1086,9 @@ export default function Reportes() {
                       <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Transferencia</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">QR</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Expensa</th>
-                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Total Día</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Total Dia</th>
                       <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Egresos</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-amber-700 uppercase">Cta Mov.</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -1064,6 +1123,9 @@ export default function Reportes() {
                         <td className="px-4 py-2 text-sm text-right text-red-600 font-medium">
                           {r.egresos > 0 ? `-$${r.egresos.toFixed(2)}` : '$0.00'}
                         </td>
+                        <td className="px-4 py-2 text-sm text-right text-amber-700 font-medium">
+                          {r.movimientos > 0 ? `$${r.movimientos.toFixed(2)}` : '-'}
+                        </td>
                       </tr>
                     ))}
                     <tr className="bg-yellow-50">
@@ -1095,6 +1157,9 @@ export default function Reportes() {
                       <td className="px-4 py-2 text-sm text-right font-bold">${dailySummaryTotals.total.toFixed(2)}</td>
                       <td className="px-4 py-2 text-sm text-right font-bold text-red-600">
                         {dailySummaryTotals.egresos > 0 ? `-$${dailySummaryTotals.egresos.toFixed(2)}` : '$0.00'}
+                      </td>
+                      <td className="px-4 py-2 text-sm text-right font-bold text-amber-700">
+                        {dailySummaryTotals.movimientos > 0 ? `$${dailySummaryTotals.movimientos.toFixed(2)}` : '-'}
                       </td>
                     </tr>
                   </tbody>
