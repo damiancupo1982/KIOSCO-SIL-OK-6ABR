@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Package, FileText, Plus, Trash2, X, AlertTriangle } from 'lucide-react';
+import { Package, FileText, Plus, Trash2, X, AlertTriangle, ShoppingCart, AlertCircle } from 'lucide-react';
 
 interface Product {
   id: string;
@@ -71,11 +71,14 @@ export default function Compras({ shift }: ComprasProps) {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [monthTotal, setMonthTotal] = useState(0);
+  const [totalDebt, setTotalDebt] = useState(0);
 
   useEffect(() => {
     loadProducts();
     loadInvoices();
     loadCurrentUser();
+    loadSummary();
   }, []);
 
   useEffect(() => {
@@ -97,6 +100,22 @@ export default function Compras({ shift }: ComprasProps) {
     if (stored) setCurrentUser(JSON.parse(stored));
   };
 
+  const loadSummary = async () => {
+    const now = new Date();
+    const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
+    const { data: monthData } = await supabase
+      .from('purchase_invoices')
+      .select('total')
+      .gte('created_at', firstDay.toISOString());
+    if (monthData) setMonthTotal(monthData.reduce((s, r) => s + Number(r.total), 0));
+
+    const { data: debtData } = await supabase
+      .from('purchase_invoices')
+      .select('total, paid_amount')
+      .in('status', ['pending', 'partial']);
+    if (debtData) setTotalDebt(debtData.reduce((s, r) => s + (Number(r.total) - Number(r.paid_amount)), 0));
+  };
+
   const loadProducts = async () => {
     const { data } = await supabase.from('products').select('*').order('name', { ascending: true });
     if (data) setProducts(data);
@@ -108,23 +127,22 @@ export default function Compras({ shift }: ComprasProps) {
   };
 
   const loadInvoiceDetail = async (invoiceId: string) => {
-    const { data: invoice } = await supabase.from('purchase_invoices').select('*').eq('id', invoiceId).single();
+    const { data: invoice } = await supabase.from('purchase_invoices').select('*').eq('id', invoiceId).maybeSingle();
+    if (!invoice) return;
     const { data: items } = await supabase
       .from('purchase_invoice_items')
-      .select('*, products(name)')
+      .select('id, quantity, purchase_price, sale_price, subtotal, product_id, products(name)')
       .eq('invoice_id', invoiceId);
-    if (invoice && items) {
-      setSelectedInvoice({
-        ...invoice,
-        items: items.map((i: any) => ({
-          product_name: i.products?.name || '',
-          quantity: i.quantity,
-          purchase_price: i.purchase_price,
-          sale_price: i.sale_price,
-          subtotal: i.subtotal,
-        })),
-      });
-    }
+    setSelectedInvoice({
+      ...invoice,
+      items: (items || []).map((i: any) => ({
+        product_name: i.products?.name || i.product_id || 'Producto sin nombre',
+        quantity: i.quantity,
+        purchase_price: i.purchase_price,
+        sale_price: i.sale_price,
+        subtotal: i.subtotal,
+      })),
+    });
   };
 
   const handleProductChange = (value: string) => {
@@ -270,19 +288,23 @@ export default function Compras({ shift }: ComprasProps) {
     setSupplier('');
     await loadProducts();
     await loadInvoices();
+    await loadSummary();
     setSuccessMessage('Factura guardada exitosamente');
   };
 
   const handlePayInvoice = async () => {
     if (!selectedInvoice) return;
-    if (!shift) {
-      setErrorMessage('No hay turno activo');
-      return;
-    }
     const amount = parseFloat(paymentAmount);
     if (!(amount > 0)) return;
     const pending = selectedInvoice.total - selectedInvoice.paid_amount;
     if (amount > pending) return;
+
+    const isExternal = paymentMethod === 'dinero_externo';
+
+    if (!isExternal && !shift) {
+      setErrorMessage('No hay turno activo para registrar el pago en caja');
+      return;
+    }
 
     await supabase.from('purchase_payments').insert({
       invoice_id: selectedInvoice.id,
@@ -290,25 +312,28 @@ export default function Compras({ shift }: ComprasProps) {
       payment_method: paymentMethod,
     });
 
-    await supabase.from('cash_transactions').insert({
-      type: 'expense',
-      category: 'Compras',
-      amount,
-      payment_method: paymentMethod,
-      shift_id: shift.id,
-      description: `Pago factura ${selectedInvoice.invoice_number} - ${selectedInvoice.supplier}`,
-    });
+    if (!isExternal) {
+      await supabase.from('cash_transactions').insert({
+        type: 'expense',
+        category: 'Compras',
+        amount,
+        payment_method: paymentMethod,
+        shift_id: shift.id,
+        description: `Pago factura ${selectedInvoice.invoice_number} - ${selectedInvoice.supplier}`,
+      });
 
-    const { data: shiftData } = await supabase.from('shifts').select('total_expenses').eq('id', shift.id).single();
-    const currentExpenses = shiftData?.total_expenses || 0;
-    await supabase.from('shifts').update({ total_expenses: currentExpenses + amount }).eq('id', shift.id);
+      const { data: shiftData } = await supabase.from('shifts').select('total_expenses').eq('id', shift.id).single();
+      const currentExpenses = shiftData?.total_expenses || 0;
+      await supabase.from('shifts').update({ total_expenses: currentExpenses + amount }).eq('id', shift.id);
+    }
 
     await loadInvoices();
     await loadInvoiceDetail(selectedInvoice.id);
+    await loadSummary();
     setShowPaymentModal(false);
     setPaymentAmount('');
     setPaymentMethod('efectivo');
-    setSuccessMessage('Pago registrado exitosamente');
+    setSuccessMessage(isExternal ? 'Pago con dinero externo registrado (no afecta caja)' : 'Pago registrado exitosamente');
   };
 
   const handleDeleteInvoice = async () => {
@@ -368,6 +393,30 @@ export default function Compras({ shift }: ComprasProps) {
           <AlertTriangle size={16} /> {errorMessage}
         </div>
       )}
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+        <div className="bg-white rounded-xl shadow border-l-4 border-blue-500 p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-blue-700 uppercase tracking-wide">Compras del Mes en Curso</p>
+            <p className="text-xs text-slate-500 mt-0.5">Total facturado desde el 1 del mes</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <ShoppingCart size={20} className="text-blue-400" />
+            <p className="text-2xl font-bold text-blue-700">${monthTotal.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl shadow border-l-4 border-red-500 p-4 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-red-700 uppercase tracking-wide">Total Deudas</p>
+            <p className="text-xs text-slate-500 mt-0.5">Saldo pendiente de facturas sin pagar</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <AlertCircle size={20} className="text-red-400" />
+            <p className="text-2xl font-bold text-red-700">${totalDebt.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
+          </div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden">
@@ -615,8 +664,14 @@ export default function Compras({ shift }: ComprasProps) {
                 <option value="transferencia">Transferencia</option>
                 <option value="qr">QR</option>
                 <option value="expensas">Expensas</option>
+                <option value="dinero_externo">Dinero Externo (no afecta caja)</option>
               </select>
             </div>
+            {paymentMethod === 'dinero_externo' && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-xs text-amber-700 font-medium">
+                Este pago marcara la factura como abonada pero NO descontara dinero de la caja.
+              </div>
+            )}
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => { setShowPaymentModal(false); setPaymentAmount(''); setPaymentMethod('efectivo'); }}
