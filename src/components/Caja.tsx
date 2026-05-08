@@ -20,6 +20,8 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
   const [customDateTo, setCustomDateTo] = useState('');
   const [showResumenDiario, setShowResumenDiario] = useState(false);
   const [monthlyMovements, setMonthlyMovements] = useState(0);
+  const [monthlyMovementsList, setMonthlyMovementsList] = useState<any[]>([]);
+  const [showMovementsModal, setShowMovementsModal] = useState(false);
   const [formData, setFormData] = useState({
     type: 'income' as 'income' | 'expense',
     category: '',
@@ -45,15 +47,18 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
     const { data } = await supabase
       .from('cash_transactions')
-      .select('amount, category')
+      .select('*')
       .eq('type', 'expense')
-      .gte('created_at', firstDay.toISOString());
+      .gte('created_at', firstDay.toISOString())
+      .order('created_at', { ascending: false });
 
     if (data) {
-      const total = data
-        .filter(tx => MOVEMENT_CATEGORIES.some(mc => (tx.category || '').trim().toLowerCase().includes(mc)))
-        .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+      const filtered = data.filter(tx =>
+        MOVEMENT_CATEGORIES.some(mc => (tx.category || '').trim().toLowerCase().includes(mc))
+      );
+      const total = filtered.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
       setMonthlyMovements(total);
+      setMonthlyMovementsList(filtered);
     }
   };
 
@@ -577,13 +582,16 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       </div>
 
       {/* Cta de Movimiento del mes */}
-      <div className="bg-white rounded-xl p-4 shadow border-l-4 border-amber-400 flex items-center justify-between">
+      <button
+        onClick={() => setShowMovementsModal(true)}
+        className="w-full bg-white rounded-xl p-4 shadow border-l-4 border-amber-400 flex items-center justify-between hover:bg-amber-50 transition-colors cursor-pointer text-left"
+      >
         <div>
           <p className="text-sm font-semibold text-amber-700 uppercase tracking-wide">Cta de Movimiento — Mes en Curso</p>
-          <p className="text-xs text-slate-500 mt-0.5">Alivios y retiros de dinero del mes actual</p>
+          <p className="text-xs text-slate-500 mt-0.5">Alivios y retiros de dinero del mes actual · click para ver detalle</p>
         </div>
         <p className="text-3xl font-bold text-amber-700">${monthlyMovements.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
-      </div>
+      </button>
 
       {/* Título tabla movimientos + Filtros */}
       <div className="space-y-4">
@@ -1180,6 +1188,58 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
                   <div className="text-center py-8 text-slate-500">No hay datos para el resumen con los filtros aplicados</div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Cta de Movimiento del mes */}
+      {showMovementsModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-xl font-bold text-white">Cta de Movimiento — Mes en Curso</h3>
+                <p className="text-amber-100 text-sm mt-0.5">Alivios y retiros registrados este mes</p>
+              </div>
+              <button onClick={() => setShowMovementsModal(false)} className="text-white/80 hover:text-white">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 p-5">
+              {monthlyMovementsList.length === 0 ? (
+                <p className="text-center text-slate-500 py-8">No hay movimientos registrados este mes</p>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Fecha</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Categoria</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Descripcion</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Metodo</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {monthlyMovementsList.map((tx, idx) => (
+                      <tr key={tx.id || idx} className="hover:bg-amber-50">
+                        <td className="px-4 py-3 text-sm text-slate-700 whitespace-nowrap">{formatDateTime(tx.created_at)}</td>
+                        <td className="px-4 py-3 text-sm font-medium text-amber-800">{tx.category}</td>
+                        <td className="px-4 py-3 text-sm text-slate-600 max-w-[200px] truncate" title={tx.description}>{tx.description || '-'}</td>
+                        <td className="px-4 py-3 text-sm text-slate-600 capitalize">{tx.payment_method || '-'}</td>
+                        <td className="px-4 py-3 text-sm font-bold text-amber-700 text-right">${Number(tx.amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-amber-50 border-t-2 border-amber-200">
+                    <tr>
+                      <td colSpan={4} className="px-4 py-3 text-sm font-bold text-amber-800">TOTAL</td>
+                      <td className="px-4 py-3 text-sm font-bold text-amber-800 text-right">${monthlyMovements.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
             </div>
           </div>
         </div>
