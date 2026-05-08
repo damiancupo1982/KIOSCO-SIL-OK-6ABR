@@ -19,6 +19,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
   const [showResumenDiario, setShowResumenDiario] = useState(false);
+  const [monthlyMovements, setMonthlyMovements] = useState(0);
   const [formData, setFormData] = useState({
     type: 'income' as 'income' | 'expense',
     category: '',
@@ -32,6 +33,29 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       loadTransactions();
     }
   }, [shift, dateFilter, customDateFrom, customDateTo]);
+
+  useEffect(() => {
+    loadMonthlyMovements();
+  }, []);
+
+  const MOVEMENT_CATEGORIES = ['alivio', 'alivios', 'cierre', 'cierre caja', 'cierre de mes', 'retiro', 'retiro efectivo'];
+
+  const loadMonthlyMovements = async () => {
+    const now = new Date();
+    const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
+    const { data } = await supabase
+      .from('cash_transactions')
+      .select('amount, category')
+      .eq('type', 'expense')
+      .gte('created_at', firstDay.toISOString());
+
+    if (data) {
+      const total = data
+        .filter(tx => MOVEMENT_CATEGORIES.some(mc => (tx.category || '').trim().toLowerCase().includes(mc)))
+        .reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+      setMonthlyMovements(total);
+    }
+  };
 
   const loadTransactions = async () => {
     if (!shift) return;
@@ -178,6 +202,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     }]);
 
     loadTransactions();
+    loadMonthlyMovements();
     setShowModal(false);
     setFormData({ type: 'income', category: '', amount: '', payment_method: 'efectivo', description: '' });
   };
@@ -549,6 +574,15 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
           <p className="text-2xl font-bold text-amber-600">${cuentaCorrienteInBox.toFixed(2)}</p>
           <p className="text-xs text-slate-500 mt-1">Ventas a crédito - pagos recibidos</p>
         </div>
+      </div>
+
+      {/* Cta de Movimiento del mes */}
+      <div className="bg-white rounded-xl p-4 shadow border-l-4 border-amber-400 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-semibold text-amber-700 uppercase tracking-wide">Cta de Movimiento — Mes en Curso</p>
+          <p className="text-xs text-slate-500 mt-0.5">Alivios y retiros de dinero del mes actual</p>
+        </div>
+        <p className="text-3xl font-bold text-amber-700">${monthlyMovements.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
       </div>
 
       {/* Título tabla movimientos + Filtros */}
