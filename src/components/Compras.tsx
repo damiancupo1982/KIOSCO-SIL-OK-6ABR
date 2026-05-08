@@ -228,7 +228,7 @@ export default function Compras({ shift }: ComprasProps) {
       return;
     }
 
-    await supabase.from('purchase_invoice_items').insert(
+    const { error: itemsError } = await supabase.from('purchase_invoice_items').insert(
       purchaseItems.map(item => ({
         invoice_id: invoiceData.id,
         product_id: item.product_id,
@@ -239,49 +239,20 @@ export default function Compras({ shift }: ComprasProps) {
       }))
     );
 
-    // Update cost, price, supplier and stock for each product.
-    // We fetch the current stock value to compute the new total manually. This
-    // ensures that purchases immediately impact stock levels even if a
-    // database trigger is not present or fails to fire.
+    if (itemsError) {
+      console.error('Error saving items:', itemsError);
+      setErrorMessage('Factura creada pero hubo un error al guardar los items: ' + itemsError.message);
+    }
+
     for (const item of purchaseItems) {
-      // Fetch the current stock for the product. Supabase may return numeric columns
-      // as strings depending on the database type (e.g. `numeric` in Postgres). Cast
-      // the stock to a number to ensure arithmetic adds numbers rather than
-      // concatenating strings. Default to zero when undefined.
-      const { data: productData, error: productError } = await supabase
-        .from('products')
-        .select('stock')
-        .eq('id', item.product_id)
-        .single();
-
-      // If we cannot fetch the current stock, log and continue to next item.
-      if (productError || !productData) {
-        console.error('Error fetching current stock for product', item.product_id, productError);
-        continue;
-      }
-
-      const currentStockNumber = typeof productData.stock === 'number'
-        ? productData.stock
-        : Number(productData.stock ?? 0);
-      const newStock = currentStockNumber + item.quantity;
-
-      // Update cost, price, supplier, and stock for the product. Use .select() so we can
-      // inspect errors; without .select() supabase silently ignores failures under
-      // row-level security. We do not rely on database triggers here, so this update
-      // ensures the stock is increased.
-      const { error: updateError } = await supabase
+      await supabase
         .from('products')
         .update({
           cost: item.purchase_price,
           price: item.sale_price,
           supplier,
-          stock: newStock,
         })
         .eq('id', item.product_id);
-
-      if (updateError) {
-        console.error('Error updating product stock for product', item.product_id, updateError);
-      }
     }
 
     setPurchaseItems([]);
