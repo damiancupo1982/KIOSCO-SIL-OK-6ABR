@@ -127,22 +127,67 @@ export default function Compras({ shift }: ComprasProps) {
   };
 
   const loadInvoiceDetail = async (invoiceId: string) => {
-    const { data: invoice } = await supabase.from('purchase_invoices').select('*').eq('id', invoiceId).maybeSingle();
-    if (!invoice) return;
-    const { data: items } = await supabase
-      .from('purchase_invoice_items')
-      .select('id, quantity, purchase_price, sale_price, subtotal, product_id, products(name)')
-      .eq('invoice_id', invoiceId);
-    setSelectedInvoice({
-      ...invoice,
-      items: (items || []).map((i: any) => ({
-        product_name: i.products?.name || i.product_id || 'Producto sin nombre',
-        quantity: i.quantity,
-        purchase_price: i.purchase_price,
-        sale_price: i.sale_price,
-        subtotal: i.subtotal,
-      })),
-    });
+    try {
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('purchase_invoices')
+        .select('*')
+        .eq('id', invoiceId)
+        .maybeSingle();
+      
+      if (invoiceError) {
+        console.error('Error loading invoice:', invoiceError);
+        setErrorMessage('Error al cargar la factura');
+        return;
+      }
+
+      if (!invoice) {
+        console.warn('Invoice not found:', invoiceId);
+        setErrorMessage('Factura no encontrada');
+        return;
+      }
+
+      const { data: items, error: itemsError } = await supabase
+        .from('purchase_invoice_items')
+        .select('id, quantity, purchase_price, sale_price, subtotal, product_id, products(name)')
+        .eq('invoice_id', invoiceId);
+      
+      if (itemsError) {
+        console.error('Error loading invoice items:', itemsError);
+        setErrorMessage('Error al cargar los detalles de la factura');
+        return;
+      }
+
+      console.log('Loaded invoice items:', items);
+
+      const processedItems = (items || []).map((i: any) => {
+        let productName = 'Producto sin nombre';
+        
+        // Try to get name from the relation
+        if (i.products?.name) {
+          productName = i.products.name;
+        } else if (i.product_id) {
+          // Fallback to searching in loaded products
+          const product = products.find(p => p.id === i.product_id);
+          productName = product?.name || `Producto (${i.product_id})`;
+        }
+        
+        return {
+          product_name: productName,
+          quantity: i.quantity,
+          purchase_price: i.purchase_price,
+          sale_price: i.sale_price,
+          subtotal: i.subtotal,
+        };
+      });
+
+      setSelectedInvoice({
+        ...invoice,
+        items: processedItems,
+      });
+    } catch (error) {
+      console.error('Unexpected error in loadInvoiceDetail:', error);
+      setErrorMessage('Error inesperado al cargar el detalle de la factura');
+    }
   };
 
   const handleProductChange = (value: string) => {
