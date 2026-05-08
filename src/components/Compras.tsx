@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Package, FileText, Plus, Trash2, X, AlertTriangle, ShoppingCart, AlertCircle } from 'lucide-react';
+import { Package, FileText, Plus, Trash2, X, AlertTriangle, ShoppingCart, AlertCircle, Edit2 } from 'lucide-react';
 
 interface Product {
   id: string;
@@ -23,6 +23,16 @@ interface PurchaseItem {
   subtotal: number;
 }
 
+interface PurchaseItemDB {
+  id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  purchase_price: number;
+  sale_price: number;
+  subtotal: number;
+}
+
 interface PurchaseInvoice {
   id: string;
   invoice_number: string;
@@ -34,13 +44,7 @@ interface PurchaseInvoice {
 }
 
 interface InvoiceDetail extends PurchaseInvoice {
-  items: {
-    product_name: string;
-    quantity: number;
-    purchase_price: number;
-    sale_price: number;
-    subtotal: number;
-  }[];
+  items: PurchaseItemDB[];
 }
 
 interface ComprasProps {
@@ -51,6 +55,9 @@ export default function Compras({ shift }: ComprasProps) {
   const [products, setProducts] = useState<Product[]>([]);
   const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<InvoiceDetail | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingItems, setEditingItems] = useState<PurchaseItemDB[]>([]);
+  const [editingSupplier, setEditingSupplier] = useState('');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('efectivo');
@@ -127,22 +134,67 @@ export default function Compras({ shift }: ComprasProps) {
   };
 
   const loadInvoiceDetail = async (invoiceId: string) => {
-    const { data: invoice } = await supabase.from('purchase_invoices').select('*').eq('id', invoiceId).maybeSingle();
-    if (!invoice) return;
-    const { data: items } = await supabase
-      .from('purchase_invoice_items')
-      .select('id, quantity, purchase_price, sale_price, subtotal, product_id, products(name)')
-      .eq('invoice_id', invoiceId);
-    setSelectedInvoice({
-      ...invoice,
-      items: (items || []).map((i: any) => ({
-        product_name: i.products?.name || i.product_id || 'Producto sin nombre',
-        quantity: i.quantity,
-        purchase_price: i.purchase_price,
-        sale_price: i.sale_price,
-        subtotal: i.subtotal,
-      })),
-    });
+    try {
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('purchase_invoices')
+        .select('*')
+        .eq('id', invoiceId)
+        .maybeSingle();
+      
+      if (invoiceError) {
+        console.error('Error loading invoice:', invoiceError);
+        setErrorMessage('Error al cargar la factura');
+        return;
+      }
+
+      if (!invoice) {
+        console.warn('Invoice not found:', invoiceId);
+        setErrorMessage('Factura no encontrada');
+        return;
+      }
+
+      const { data: items, error: itemsError } = await supabase
+        .from('purchase_invoice_items')
+        .select('id, quantity, purchase_price, sale_price, subtotal, product_id, products(name)')
+        .eq('invoice_id', invoiceId);
+      
+      if (itemsError) {
+        console.error('Error loading invoice items:', itemsError);
+        setErrorMessage('Error al cargar los detalles de la factura');
+        return;
+      }
+
+      const processedItems = (items || []).map((i: any) => {
+        let productName = 'Producto sin nombre';
+        if (i.products?.name) {
+          productName = i.products.name;
+        } else if (i.product_id) {
+          const product = products.find(p => p.id === i.product_id);
+          productName = product?.name || `Producto (${i.product_id})`;
+        }
+        
+        return {
+          id: i.id,
+          product_name: productName,
+          quantity: i.quantity,
+          purchase_price: i.purchase_price,
+          sale_price: i.sale_price,
+          subtotal: i.subtotal,
+          product_id: i.product_id,
+        };
+      });
+
+      setSelectedInvoice({
+        ...invoice,
+        items: processedItems,
+      });
+      setEditingSupplier(invoice.supplier);
+      setEditingItems(processedItems);
+      setIsEditMode(false);
+    } catch (error) {
+      console.error('Unexpected error in loadInvoiceDetail:', error);
+      setErrorMessage('Error inesperado al cargar el detalle de la factura');
+    }
   };
 
   const handleProductChange = (value: string) => {
@@ -204,7 +256,13 @@ export default function Compras({ shift }: ComprasProps) {
     setPurchaseItems(prev => prev.filter(i => i.tempId !== tempId));
   };
 
+  const removeEditingItem = (itemId: string) => {
+    setEditingItems(prev => prev.filter(i => i.id !== itemId));
+  };
+
   const getTotalPurchase = () => purchaseItems.reduce((sum, i) => sum + i.subtotal, 0);
+
+  const getEditingTotal = () => editingItems.reduce((sum, i) => sum + i.subtotal, 0);
 
   const savePurchaseInvoice = async () => {
     if (purchaseItems.length === 0 || !supplier.trim()) return;
@@ -263,6 +321,82 @@ export default function Compras({ shift }: ComprasProps) {
     setSuccessMessage('Factura guardada exitosamente');
   };
 
+  const handleEditInvoice = () => {
+    setIsEditMode(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!selectedInvoice || editingItems.length === 0 || !editingSupplier.trim()) {
+      setErrorMessage('Debe tener al menos un item y proveedor');
+      return;
+    }
+
+    try {
+      const newTotal = getEditingTotal();
+
+      // Delete old items
+      await supabase
+        .from('purchase_invoice_items')
+        .delete()
+        .eq('invoice_id', selectedInvoice.id);
+
+      // Insert new items
+      const { error: itemsError } = await supabase
+        .from('purchase_invoice_items')
+        .insert(
+          editingItems.map(item => ({
+            invoice_id: selectedInvoice.id,
+            product_id: item.product_id,
+            quantity: item.quantity,
+            purchase_price: item.purchase_price,
+            sale_price: item.sale_price,
+            subtotal: item.subtotal,
+          }))
+        );
+
+      if (itemsError) {
+        setErrorMessage('Error al actualizar items: ' + itemsError.message);
+        return;
+      }
+
+      // Update invoice
+      const { error: invoiceError } = await supabase
+        .from('purchase_invoices')
+        .update({ 
+          supplier: editingSupplier,
+          total: newTotal 
+        })
+        .eq('id', selectedInvoice.id);
+
+      if (invoiceError) {
+        setErrorMessage('Error al actualizar factura: ' + invoiceError.message);
+        return;
+      }
+
+      // Update product prices
+      for (const item of editingItems) {
+        await supabase
+          .from('products')
+          .update({
+            cost: item.purchase_price,
+            price: item.sale_price,
+            supplier: editingSupplier,
+          })
+          .eq('id', item.product_id);
+      }
+
+      setIsEditMode(false);
+      await loadInvoices();
+      await loadProducts();
+      await loadSummary();
+      await loadInvoiceDetail(selectedInvoice.id);
+      setSuccessMessage('Factura actualizada exitosamente');
+    } catch (error) {
+      console.error('Error saving edit:', error);
+      setErrorMessage('Error al guardar los cambios');
+    }
+  };
+
   const handlePayInvoice = async () => {
     if (!selectedInvoice) return;
     const amount = parseFloat(paymentAmount);
@@ -318,14 +452,11 @@ export default function Compras({ shift }: ComprasProps) {
       return;
     }
 
-    // Remove associated inventory movements
     await supabase
       .from('inventory_movements')
       .delete()
       .eq('reference', invoiceToDelete.invoice_number);
 
-    // Delete the invoice — the DB trigger revert_stock_on_purchase_delete fires
-    // automatically via ON DELETE CASCADE on purchase_invoice_items, reverting stock.
     const { error: invoiceDeleteError } = await supabase
       .from('purchase_invoices')
       .delete()
@@ -527,7 +658,7 @@ export default function Compras({ shift }: ComprasProps) {
         </div>
       </div>
 
-      {selectedInvoice && (
+      {selectedInvoice && !isEditMode && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl max-w-2xl w-full mx-4 overflow-hidden shadow-2xl">
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
@@ -588,18 +719,151 @@ export default function Compras({ shift }: ComprasProps) {
 
             <div className="px-6 py-4 flex gap-3 justify-end border-t border-slate-200">
               {selectedInvoice.status !== 'paid' && (
-                <button
-                  onClick={() => setShowPaymentModal(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
-                >
-                  Registrar Pago
-                </button>
+                <>
+                  <button
+                    onClick={handleEditInvoice}
+                    className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+                  >
+                    <Edit2 size={15} /> Editar
+                  </button>
+                  <button
+                    onClick={() => setShowPaymentModal(true)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+                  >
+                    Registrar Pago
+                  </button>
+                </>
               )}
               <button
                 onClick={() => { setInvoiceToDelete(selectedInvoice); setShowDeleteModal(true); }}
                 className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
               >
                 <Trash2 size={15} /> Eliminar Factura
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedInvoice && isEditMode && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full mx-4 overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-amber-50">
+              <h3 className="font-bold text-slate-800 text-lg">Editar Factura: {selectedInvoice.invoice_number}</h3>
+              <button onClick={() => setIsEditMode(false)} className="text-slate-400 hover:text-slate-600">
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="px-6 py-4 space-y-4 max-h-96 overflow-y-auto">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Proveedor</label>
+                <input
+                  type="text"
+                  value={editingSupplier}
+                  onChange={e => setEditingSupplier(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Items</label>
+                <div className="space-y-2">
+                  {editingItems.map((item) => (
+                    <div key={item.id} className="bg-slate-50 rounded-xl p-3 space-y-2 border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-700">{item.product_name}</span>
+                        <button 
+                          onClick={() => removeEditingItem(item.id)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        <div>
+                          <label className="block text-xs text-slate-600 mb-1">Cantidad</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={item.quantity}
+                            onChange={e => {
+                              const newQuantity = parseFloat(e.target.value) || 0;
+                              setEditingItems(prev => prev.map(i => 
+                                i.id === item.id 
+                                  ? { ...i, quantity: newQuantity, subtotal: newQuantity * i.purchase_price }
+                                  : i
+                              ));
+                            }}
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-600 mb-1">P. Compra</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={item.purchase_price}
+                            onChange={e => {
+                              const newPrice = parseFloat(e.target.value) || 0;
+                              setEditingItems(prev => prev.map(i => 
+                                i.id === item.id 
+                                  ? { ...i, purchase_price: newPrice, subtotal: i.quantity * newPrice }
+                                  : i
+                              ));
+                            }}
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-600 mb-1">P. Venta</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={item.sale_price}
+                            onChange={e => {
+                              const newPrice = parseFloat(e.target.value) || 0;
+                              setEditingItems(prev => prev.map(i => 
+                                i.id === item.id 
+                                  ? { ...i, sale_price: newPrice }
+                                  : i
+                              ));
+                            }}
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-600 mb-1">Subtotal</label>
+                          <input
+                            type="number"
+                            disabled
+                            value={item.subtotal.toFixed(2)}
+                            className="w-full border border-slate-300 rounded px-2 py-1 text-sm bg-slate-100"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-sm font-bold text-amber-800">
+                Total: ${getEditingTotal().toFixed(2)}
+              </div>
+            </div>
+
+            <div className="px-6 py-4 flex gap-3 justify-end border-t border-slate-200 bg-slate-50">
+              <button
+                onClick={() => setIsEditMode(false)}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+              >
+                Guardar Cambios
               </button>
             </div>
           </div>
