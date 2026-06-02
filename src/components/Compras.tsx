@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Package, FileText, Plus, Trash2, X, AlertTriangle, ShoppingCart, AlertCircle, Edit2 } from 'lucide-react';
+import { Package, FileText, Plus, Trash2, X, AlertTriangle, ShoppingCart, AlertCircle, CreditCard as Edit2 } from 'lucide-react';
 
 interface Product {
   id: string;
@@ -155,9 +155,9 @@ export default function Compras({ shift }: ComprasProps) {
 
       const { data: items, error: itemsError } = await supabase
         .from('purchase_invoice_items')
-        .select('id, quantity, purchase_price, sale_price, subtotal, product_id, products(name)')
+        .select('id, quantity, purchase_price, sale_price, subtotal, product_id')
         .eq('invoice_id', invoiceId);
-      
+
       if (itemsError) {
         console.error('Error loading invoice items:', itemsError);
         setErrorMessage('Error al cargar los detalles de la factura');
@@ -165,17 +165,10 @@ export default function Compras({ shift }: ComprasProps) {
       }
 
       const processedItems = (items || []).map((i: any) => {
-        let productName = 'Producto sin nombre';
-        if (i.products?.name) {
-          productName = i.products.name;
-        } else if (i.product_id) {
-          const product = products.find(p => p.id === i.product_id);
-          productName = product?.name || `Producto (${i.product_id})`;
-        }
-        
+        const product = products.find(p => p.id === i.product_id);
         return {
           id: i.id,
-          product_name: productName,
+          product_name: product?.name || 'Producto sin nombre',
           quantity: i.quantity,
           purchase_price: i.purchase_price,
           sale_price: i.sale_price,
@@ -674,7 +667,7 @@ export default function Compras({ shift }: ComprasProps) {
             <div className="px-6 py-4 overflow-y-auto max-h-64">
               {selectedInvoice.items.length === 0 ? (
                 <div className="text-center py-6 text-slate-400 text-sm">
-                  Esta factura no tiene items registrados. Fue creada con una versión anterior del sistema que tenía un error en el guardado de productos.
+                  Esta factura no tiene items registrados.
                 </div>
               ) : (
                 <table className="w-full text-sm">
