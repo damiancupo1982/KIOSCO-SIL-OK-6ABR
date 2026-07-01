@@ -19,6 +19,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
   const [showResumenDiario, setShowResumenDiario] = useState(false);
+  const [showEgresosDetail, setShowEgresosDetail] = useState(false);
   const [monthlyMovements, setMonthlyMovements] = useState(0);
   const [monthlyMovementsList, setMonthlyMovementsList] = useState<any[]>([]);
   const [showMovementsModal, setShowMovementsModal] = useState(false);
@@ -235,6 +236,24 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
 
   const openingCash = Number(shift?.opening_cash || 0);
   const expectedCash = openingCash + balance;
+
+  const expenseTransactions = useMemo(() => {
+    return transactions.filter(t => t.type === 'expense');
+  }, [transactions]);
+
+  const expenseByCategory = useMemo(() => {
+    const map = new Map<string, { total: number; count: number }>();
+    expenseTransactions.forEach(t => {
+      const cat = t.category || 'Sin categoría';
+      const prev = map.get(cat) || { total: 0, count: 0 };
+      prev.total += Number(t.amount);
+      prev.count += 1;
+      map.set(cat, prev);
+    });
+    return Array.from(map.entries())
+      .map(([category, data]) => ({ category, ...data }))
+      .sort((a, b) => b.total - a.total);
+  }, [expenseTransactions]);
 
   // Saldos por método de pago
 
@@ -533,12 +552,16 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
           <p className="text-3xl font-bold">${totalIncome.toFixed(2)}</p>
         </div>
 
-        <div className="bg-gradient-to-br from-red-500 to-pink-600 rounded-xl p-6 text-white shadow-lg">
+        <div
+          onClick={() => setShowEgresosDetail(true)}
+          className="bg-gradient-to-br from-red-500 to-pink-600 rounded-xl p-6 text-white shadow-lg cursor-pointer hover:from-red-600 hover:to-pink-700 transition-all"
+        >
           <div className="flex items-center justify-between mb-2">
             <span className="text-red-100">Egresos</span>
             <TrendingDown size={24} />
           </div>
           <p className="text-3xl font-bold">${totalExpense.toFixed(2)}</p>
+          <p className="text-xs text-red-100 mt-1">Click para ver detalle</p>
         </div>
 
         <div className="bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl p-6 text-white shadow-lg">
@@ -1240,6 +1263,78 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
                   </tfoot>
                 </table>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal detalle de egresos */}
+      {showEgresosDetail && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="bg-gradient-to-r from-red-500 to-pink-600 p-5 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-xl font-bold text-white">Detalle de Egresos</h3>
+                <p className="text-red-100 text-sm mt-0.5">Desglose del periodo filtrado</p>
+              </div>
+              <button onClick={() => setShowEgresosDetail(false)} className="text-white/80 hover:text-white">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto flex-1 p-5 space-y-5">
+              {/* Summary by category */}
+              <div>
+                <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-3">Resumen por Categoria</h4>
+                {expenseByCategory.length === 0 ? (
+                  <p className="text-center text-slate-500 py-4">No hay egresos en este periodo</p>
+                ) : (
+                  <div className="space-y-2">
+                    {expenseByCategory.map((cat) => (
+                      <div key={cat.category} className="flex items-center justify-between bg-red-50 rounded-lg px-4 py-3">
+                        <div>
+                          <p className="font-semibold text-slate-800">{cat.category}</p>
+                          <p className="text-xs text-slate-500">{cat.count} movimiento{cat.count !== 1 ? 's' : ''}</p>
+                        </div>
+                        <p className="text-lg font-bold text-red-700">${cat.total.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Individual transactions */}
+              <div>
+                <h4 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-3">Todos los Egresos</h4>
+                <table className="w-full">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Fecha</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Categoria</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Descripcion</th>
+                      <th className="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Metodo</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Monto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {expenseTransactions.map((tx) => (
+                      <tr key={tx.id} className="hover:bg-red-50">
+                        <td className="px-3 py-2.5 text-sm text-slate-700 whitespace-nowrap">{formatDateTime(tx.created_at)}</td>
+                        <td className="px-3 py-2.5 text-sm font-medium text-red-800">{tx.category}</td>
+                        <td className="px-3 py-2.5 text-sm text-slate-600 max-w-[180px] truncate" title={tx.description || ''}>{tx.description || '-'}</td>
+                        <td className="px-3 py-2.5 text-sm text-slate-600 capitalize">{tx.payment_method}</td>
+                        <td className="px-3 py-2.5 text-sm font-bold text-red-700 text-right">${Number(tx.amount).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-red-50 border-t-2 border-red-200">
+                    <tr>
+                      <td colSpan={4} className="px-3 py-3 text-sm font-bold text-red-800">TOTAL EGRESOS</td>
+                      <td className="px-3 py-3 text-sm font-bold text-red-800 text-right">${totalExpense.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             </div>
           </div>
         </div>
