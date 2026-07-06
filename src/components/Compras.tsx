@@ -76,6 +76,7 @@ export default function Compras({ shift }: ComprasProps) {
   const [editPaymentPassword, setEditPaymentPassword] = useState('');
   const [editPaymentAuth, setEditPaymentAuth] = useState(false);
   const [editingPayments, setEditingPayments] = useState<PurchasePayment[]>([]);
+  const [originalPayments, setOriginalPayments] = useState<PurchasePayment[]>([]);
   const [purchaseItems, setPurchaseItems] = useState<PurchaseItem[]>([]);
   const [currentItem, setCurrentItem] = useState({
     product_id: '',
@@ -455,6 +456,7 @@ export default function Compras({ shift }: ComprasProps) {
 
   const handleOpenEditPayments = () => {
     if (!selectedInvoice) return;
+    setOriginalPayments(selectedInvoice.payments.map(p => ({ ...p })));
     setEditingPayments(selectedInvoice.payments.map(p => ({ ...p })));
     setEditPaymentPassword('');
     setEditPaymentAuth(false);
@@ -471,17 +473,56 @@ export default function Compras({ shift }: ComprasProps) {
 
   const handleSavePayments = async () => {
     if (!selectedInvoice) return;
-    for (const payment of editingPayments) {
+    const description = `Pago factura ${selectedInvoice.invoice_number} - ${selectedInvoice.supplier}`;
+
+    for (let i = 0; i < editingPayments.length; i++) {
+      const payment = editingPayments[i];
+      const original = originalPayments[i];
+      if (payment.payment_method === original.payment_method) continue;
+
       await supabase
         .from('purchase_payments')
         .update({ payment_method: payment.payment_method })
         .eq('id', payment.id);
 
-      await supabase
-        .from('cash_transactions')
-        .update({ payment_method: payment.payment_method })
-        .eq('description', `Pago factura ${selectedInvoice.invoice_number} - ${selectedInvoice.supplier}`)
-        .eq('amount', payment.amount);
+      const wasExternal = original.payment_method === 'dinero_externo';
+      const isNowExternal = payment.payment_method === 'dinero_externo';
+
+      if (!wasExternal && isNowExternal) {
+        // Changed from regular to dinero_externo: delete the cash_transaction
+        await supabase
+          .from('cash_transactions')
+          .delete()
+          .eq('category', 'Compras')
+          .eq('type', 'expense')
+          .like('description', `%${selectedInvoice.invoice_number}%`)
+          .eq('amount', payment.amount)
+          .eq('payment_method', original.payment_method);
+      } else if (wasExternal && !isNowExternal) {
+        // Changed from dinero_externo to regular: create a cash_transaction
+        if (!shift) {
+          setErrorMessage('No hay turno activo para registrar el movimiento en caja');
+          return;
+        }
+        await supabase.from('cash_transactions').insert({
+          type: 'expense',
+          category: 'Compras',
+          amount: payment.amount,
+          payment_method: payment.payment_method,
+          shift_id: shift.id,
+          description,
+        });
+      } else {
+        // Changed between regular methods: update payment_method on cash_transaction
+        await supabase
+          .from('cash_transactions')
+          .update({ payment_method: payment.payment_method })
+          .eq('category', 'Compras')
+          .eq('type', 'expense')
+          .like('description', `%${selectedInvoice.invoice_number}%`)
+          .eq('amount', payment.amount)
+          .eq('payment_method', original.payment_method);
+      }
     }
     await loadInvoiceDetail(selectedInvoice.id);
     setShowEditPaymentModal(false);
