@@ -45,6 +45,14 @@ interface PurchaseInvoice {
 
 interface InvoiceDetail extends PurchaseInvoice {
   items: PurchaseItemDB[];
+  payments: PurchasePayment[];
+}
+
+interface PurchasePayment {
+  id: string;
+  amount: number;
+  payment_method: string;
+  created_at: string;
 }
 
 interface ComprasProps {
@@ -64,6 +72,10 @@ export default function Compras({ shift }: ComprasProps) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deletePassword, setDeletePassword] = useState('');
   const [invoiceToDelete, setInvoiceToDelete] = useState<PurchaseInvoice | null>(null);
+  const [showEditPaymentModal, setShowEditPaymentModal] = useState(false);
+  const [editPaymentPassword, setEditPaymentPassword] = useState('');
+  const [editPaymentAuth, setEditPaymentAuth] = useState(false);
+  const [editingPayments, setEditingPayments] = useState<PurchasePayment[]>([]);
   const [purchaseItems, setPurchaseItems] = useState<PurchaseItem[]>([]);
   const [currentItem, setCurrentItem] = useState({
     product_id: '',
@@ -177,9 +189,16 @@ export default function Compras({ shift }: ComprasProps) {
         };
       });
 
+      const { data: payments } = await supabase
+        .from('purchase_payments')
+        .select('id, amount, payment_method, created_at')
+        .eq('invoice_id', invoiceId)
+        .order('created_at', { ascending: true });
+
       setSelectedInvoice({
         ...invoice,
         items: processedItems,
+        payments: payments || [],
       });
       setEditingSupplier(invoice.supplier);
       setEditingItems(processedItems);
@@ -432,6 +451,42 @@ export default function Compras({ shift }: ComprasProps) {
     setPaymentAmount('');
     setPaymentMethod('efectivo');
     setSuccessMessage(isExternal ? 'Pago con dinero externo registrado (no afecta caja)' : 'Pago registrado exitosamente');
+  };
+
+  const handleOpenEditPayments = () => {
+    if (!selectedInvoice) return;
+    setEditingPayments(selectedInvoice.payments.map(p => ({ ...p })));
+    setEditPaymentPassword('');
+    setEditPaymentAuth(false);
+    setShowEditPaymentModal(true);
+  };
+
+  const handleEditPaymentAuth = () => {
+    if (editPaymentPassword === '842114') {
+      setEditPaymentAuth(true);
+    } else {
+      setErrorMessage('Clave incorrecta');
+    }
+  };
+
+  const handleSavePayments = async () => {
+    if (!selectedInvoice) return;
+    for (const payment of editingPayments) {
+      await supabase
+        .from('purchase_payments')
+        .update({ payment_method: payment.payment_method })
+        .eq('id', payment.id);
+
+      await supabase
+        .from('cash_transactions')
+        .update({ payment_method: payment.payment_method })
+        .eq('description', `Pago factura ${selectedInvoice.invoice_number} - ${selectedInvoice.supplier}`)
+        .eq('amount', payment.amount);
+    }
+    await loadInvoiceDetail(selectedInvoice.id);
+    setShowEditPaymentModal(false);
+    setEditPaymentAuth(false);
+    setSuccessMessage('Pagos actualizados correctamente');
   };
 
   const handleDeleteInvoice = async () => {
@@ -710,6 +765,23 @@ export default function Compras({ shift }: ComprasProps) {
               </div>
             </div>
 
+            {selectedInvoice.payments && selectedInvoice.payments.length > 0 && (
+              <div className="px-6 py-3 border-t border-slate-200">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Pagos registrados</p>
+                <div className="space-y-1.5">
+                  {selectedInvoice.payments.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between text-sm bg-green-50 rounded-lg px-3 py-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-slate-600">{new Date(p.created_at).toLocaleDateString('es-AR')}</span>
+                        <span className="capitalize font-medium text-slate-700">{p.payment_method === 'dinero_externo' ? 'Dinero externo' : p.payment_method}</span>
+                      </div>
+                      <span className="font-bold text-green-700">${Number(p.amount).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="px-6 py-4 flex gap-3 justify-end border-t border-slate-200">
               {selectedInvoice.status !== 'paid' && (
                 <>
@@ -726,6 +798,14 @@ export default function Compras({ shift }: ComprasProps) {
                     Registrar Pago
                   </button>
                 </>
+              )}
+              {selectedInvoice.payments && selectedInvoice.payments.length > 0 && (
+                <button
+                  onClick={handleOpenEditPayments}
+                  className="flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+                >
+                  <Edit2 size={15} /> Editar Pagos
+                </button>
               )}
               <button
                 onClick={() => { setInvoiceToDelete(selectedInvoice); setShowDeleteModal(true); }}
@@ -913,6 +993,86 @@ export default function Compras({ shift }: ComprasProps) {
               >
                 Confirmar Pago
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showEditPaymentModal && selectedInvoice && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full mx-4 overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 bg-amber-50">
+              <h3 className="font-bold text-slate-800 text-lg">Editar Pagos</h3>
+              <button onClick={() => { setShowEditPaymentModal(false); setEditPaymentAuth(false); }} className="text-slate-400 hover:text-slate-600">
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              {!editPaymentAuth ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-slate-600">Ingrese la clave de administrador para editar los pagos</p>
+                  <input
+                    type="password"
+                    placeholder="Clave de admin"
+                    value={editPaymentPassword}
+                    onChange={e => setEditPaymentPassword(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleEditPaymentAuth()}
+                    className="w-full border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <button
+                    onClick={handleEditPaymentAuth}
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+                  >
+                    Confirmar
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {editingPayments.map((payment, idx) => (
+                    <div key={payment.id} className="bg-slate-50 rounded-xl p-3 space-y-2 border border-slate-200">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-slate-500">{new Date(payment.created_at).toLocaleDateString('es-AR')}</span>
+                        <span className="font-bold text-slate-800">${Number(payment.amount).toFixed(2)}</span>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Metodo de pago</label>
+                        <select
+                          value={payment.payment_method}
+                          onChange={e => {
+                            const updated = [...editingPayments];
+                            updated[idx] = { ...updated[idx], payment_method: e.target.value };
+                            setEditingPayments(updated);
+                          }}
+                          className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        >
+                          <option value="efectivo">Efectivo</option>
+                          <option value="transferencia">Transferencia</option>
+                          <option value="qr">QR</option>
+                          <option value="tarjeta">Tarjeta</option>
+                          <option value="expensas">Expensas</option>
+                          <option value="dinero_externo">Dinero Externo</option>
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      onClick={() => { setShowEditPaymentModal(false); setEditPaymentAuth(false); }}
+                      className="flex-1 px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={handleSavePayments}
+                      className="flex-1 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors"
+                    >
+                      Guardar Cambios
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
