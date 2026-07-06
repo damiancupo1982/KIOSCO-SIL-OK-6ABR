@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product } from '../lib/supabase';
-import { Search, Plus, Edit2, Trash2, AlertTriangle, TrendingDown, TrendingUp, Package } from 'lucide-react';
+import { Search, Plus, CreditCard as Edit2, Trash2, AlertTriangle, TrendingDown, TrendingUp, Package } from 'lucide-react';
 
 const PREDEFINED_CATEGORIES = ['Bebida', 'Comida', 'Artículos de Deporte'];
 
@@ -38,7 +38,7 @@ export default function Stock() {
       return false;
     }
 
-    if (password === 'admin123') {
+    if (password === '842114') {
       return true;
     }
 
