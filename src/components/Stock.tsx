@@ -135,8 +135,6 @@ export default function Stock() {
       }
     }
 
-    const newStock = parseInt(formData.stock) || 0;
-
     let finalCategory = '';
     if (categoryOption === '__CUSTOM__') {
       finalCategory = customCategory.trim();
@@ -144,32 +142,36 @@ export default function Stock() {
       finalCategory = categoryOption;
     }
 
-    const productData = {
-      code: codeTrimmed,
-      name: formData.name,
-      description: formData.description,
-      category: finalCategory,
-      price: parseFloat(formData.price) || 0,
-      cost: parseFloat(formData.cost) || 0,
-      stock: newStock,
-      min_stock: parseInt(formData.min_stock) || 0,
-      active: true,
-      updated_at: new Date().toISOString()
-    };
-
     if (editingProduct) {
-      const previousStock = editingProduct.stock ?? 0;
-
-      if (newStock !== previousStock) {
-        const ok = askAdminPassword();
-        if (!ok) return;
-      }
+      const productData = {
+        code: codeTrimmed,
+        name: formData.name,
+        description: formData.description,
+        category: finalCategory,
+        price: parseFloat(formData.price) || 0,
+        cost: parseFloat(formData.cost) || 0,
+        min_stock: parseInt(formData.min_stock) || 0,
+        updated_at: new Date().toISOString()
+      };
 
       await supabase
         .from('products')
         .update(productData)
         .eq('id', editingProduct.id);
     } else {
+      const productData = {
+        code: codeTrimmed,
+        name: formData.name,
+        description: formData.description,
+        category: finalCategory,
+        price: parseFloat(formData.price) || 0,
+        cost: parseFloat(formData.cost) || 0,
+        stock: 0,
+        min_stock: parseInt(formData.min_stock) || 0,
+        active: true,
+        updated_at: new Date().toISOString()
+      };
+
       await supabase.from('products').insert([productData]);
     }
 
@@ -586,17 +588,20 @@ export default function Stock() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    Stock *
+                    Stock
                   </label>
-                  <input
-                    type="number"
-                    required
-                    value={formData.stock}
-                    onChange={(e) =>
-                      setFormData({ ...formData, stock: e.target.value })
-                    }
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition"
-                  />
+                  {editingProduct ? (
+                    <p className="px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-800 font-bold">
+                      {editingProduct.stock} un.
+                    </p>
+                  ) : (
+                    <p className="px-4 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-800 font-bold">
+                      0 un.
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    PARA CARGAR STOCK DEBE INGRESARSE LA FACTURA DESDE EL MODULO DE COMPRAS
+                  </p>
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
