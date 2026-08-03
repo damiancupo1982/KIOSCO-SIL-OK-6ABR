@@ -93,18 +93,18 @@ export default function Reportes() {
       cashQuery = cashQuery.gte('created_at', from);
     } else if (dateFilter === 'prev_month') {
       const now = new Date();
-      const firstDayPrevMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0));
-      const lastDayPrevMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999));
-      const fromIso = firstDayPrevMonth.toISOString();
-      const toIso = lastDayPrevMonth.toISOString();
+      const ARG_OFFSET = 3;
+      const fromIso = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1, ARG_OFFSET, 0, 0, 0)).toISOString();
+      const toIso = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, ARG_OFFSET, 0, 0, 0) - 1).toISOString();
       salesQuery = salesQuery.gte('created_at', fromIso).lte('created_at', toIso);
       cashQuery = cashQuery.gte('created_at', fromIso).lte('created_at', toIso);
     } else if (dateFilter === 'custom' && customDateFrom && customDateTo) {
       const [fy, fm, fd] = customDateFrom.split('-').map(Number);
       const [ty, tm, td] = customDateTo.split('-').map(Number);
+      const ARG_OFFSET = 3;
 
-      const fromIso = new Date(Date.UTC(fy, fm - 1, fd, 0, 0, 0, 0)).toISOString();
-      const toIso = new Date(Date.UTC(ty, tm - 1, td, 23, 59, 59, 999)).toISOString();
+      const fromIso = new Date(Date.UTC(fy, fm - 1, fd, ARG_OFFSET, 0, 0, 0)).toISOString();
+      const toIso = new Date(Date.UTC(ty, tm - 1, td + 1, ARG_OFFSET, 0, 0, 0) - 1).toISOString();
 
       salesQuery = salesQuery.gte('created_at', fromIso).lte('created_at', toIso);
       cashQuery = cashQuery.gte('created_at', fromIso).lte('created_at', toIso);

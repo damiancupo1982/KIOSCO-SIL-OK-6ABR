@@ -122,7 +122,7 @@ export default function Compras({ shift }: ComprasProps) {
 
   const loadSummary = async () => {
     const now = new Date();
-    const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
+    const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 3, 0, 0, 0));
     const { data: monthData } = await supabase
       .from('purchase_invoices')
       .select('total')

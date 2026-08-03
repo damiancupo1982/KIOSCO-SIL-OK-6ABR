@@ -45,7 +45,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
 
   const loadMonthlyMovements = async () => {
     const now = new Date();
-    const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0));
+    const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 3, 0, 0, 0));
     const { data } = await supabase
       .from('cash_transactions')
       .select('*')
@@ -71,12 +71,14 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       .select('*')
       .order('created_at', { ascending: false });
 
+    const ARG_OFFSET = 3;
     if (dateFilter === 'shift') {
       query = query.eq('shift_id', shift.id);
     } else if (dateFilter === 'today') {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      query = query.gte('created_at', today.toISOString());
+      const now = new Date();
+      const todayArg = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), ARG_OFFSET, 0, 0, 0));
+      if (todayArg.getTime() > Date.now()) todayArg.setUTCDate(todayArg.getUTCDate() - 1);
+      query = query.gte('created_at', todayArg.toISOString());
     } else if (dateFilter === 'week') {
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - 7);
@@ -87,27 +89,23 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       query = query.gte('created_at', monthAgo.toISOString());
     } else if (dateFilter === 'currentMonth') {
       const now = new Date();
-      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-      firstDay.setHours(0, 0, 0, 0);
+      const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, ARG_OFFSET, 0, 0, 0));
       query = query.gte('created_at', firstDay.toISOString());
     } else if (dateFilter === 'previousMonth') {
       const now = new Date();
-      const firstDayPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const lastDayPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-      firstDayPrevMonth.setHours(0, 0, 0, 0);
-      lastDayPrevMonth.setHours(23, 59, 59, 999);
+      const fromIso = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1, ARG_OFFSET, 0, 0, 0)).toISOString();
+      const toIso = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, ARG_OFFSET, 0, 0, 0) - 1).toISOString();
       query = query
-        .gte('created_at', firstDayPrevMonth.toISOString())
-        .lte('created_at', lastDayPrevMonth.toISOString());
+        .gte('created_at', fromIso)
+        .lte('created_at', toIso);
     } else if (dateFilter === 'custom' && customDateFrom && customDateTo) {
-      const fromDate = new Date(customDateFrom);
-      fromDate.setHours(0, 0, 0, 0);
-      const toDate = new Date(customDateTo);
-      toDate.setHours(23, 59, 59, 999);
-
+      const [fy, fm, fd] = customDateFrom.split('-').map(Number);
+      const [ty, tm, td] = customDateTo.split('-').map(Number);
+      const fromIso = new Date(Date.UTC(fy, fm - 1, fd, ARG_OFFSET, 0, 0, 0)).toISOString();
+      const toIso = new Date(Date.UTC(ty, tm - 1, td + 1, ARG_OFFSET, 0, 0, 0) - 1).toISOString();
       query = query
-        .gte('created_at', fromDate.toISOString())
-        .lte('created_at', toDate.toISOString());
+        .gte('created_at', fromIso)
+        .lte('created_at', toIso);
     }
 
     const { data } = await query;
