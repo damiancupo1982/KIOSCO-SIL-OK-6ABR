@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, SaleItem, Shift } from '../lib/supabase';
-import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, BookOpen } from 'lucide-react';
+import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, BookOpen, AlertTriangle } from 'lucide-react';
 
 interface VentasProps {
   shift: Shift | null;
@@ -21,6 +21,9 @@ export default function Ventas({ shift }: VentasProps) {
   const [qrAmount, setQrAmount] = useState(0);
   const [expensasAmount, setExpensasAmount] = useState(0);
   const [cuentaCorrienteAmount, setCuentaCorrienteAmount] = useState(0);
+
+  const [showOldDebtWarning, setShowOldDebtWarning] = useState(false);
+  const [oldDebtClients, setOldDebtClients] = useState<{ name: string; lot: string; debt: number; days: number }[]>([]);
 
   useEffect(() => {
     loadProducts();
@@ -52,6 +55,31 @@ export default function Ventas({ shift }: VentasProps) {
       .gt('stock', 0);
 
     setProducts(data || []);
+  };
+
+  const checkOldDebts = async () => {
+    const [{ data: accountsData }, { data: txData }] = await Promise.all([
+      supabase.from('customer_accounts').select('*').gt('total_debt', 0),
+      supabase.from('current_account_transactions').select('*').eq('type', 'cargo'),
+    ]);
+    const oldDebts: { name: string; lot: string; debt: number; days: number }[] = [];
+    for (const acct of accountsData || []) {
+      const acctTxs = (txData || []).filter((t: any) => t.customer_account_id === acct.id);
+      if (acctTxs.length > 0) {
+        const oldest = acctTxs.reduce((o: any, t: any) =>
+          new Date(t.created_at) < new Date(o.created_at) ? t : o
+        );
+        const daysOld = Math.floor((Date.now() - new Date(oldest.created_at).getTime()) / (1000 * 60 * 60 * 24));
+        if (daysOld > 30) {
+          oldDebts.push({ name: acct.customer_name, lot: acct.customer_lot, debt: Number(acct.total_debt), days: daysOld });
+        }
+      }
+    }
+    if (oldDebts.length > 0) {
+      oldDebts.sort((a, b) => b.days - a.days);
+      setOldDebtClients(oldDebts);
+      setShowOldDebtWarning(true);
+    }
   };
 
   const addToCart = (product: Product) => {
@@ -308,6 +336,7 @@ export default function Ventas({ shift }: VentasProps) {
     setExpensasAmount(0);
     setCuentaCorrienteAmount(0);
     loadProducts();
+    checkOldDebts();
   };
 
   const baseCategories = ['Bebida', 'Comida', 'Artículos de Deporte'];
@@ -333,6 +362,48 @@ export default function Ventas({ shift }: VentasProps) {
   });
 
   return (
+    <>
+      {showOldDebtWarning && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col">
+            <div className="bg-red-50 border-b border-red-100 rounded-t-2xl p-5 flex items-start gap-4">
+              <div className="bg-red-100 p-3 rounded-full flex-shrink-0">
+                <AlertTriangle className="w-7 h-7 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-red-800">Deudas Antiguas Detectadas</h3>
+                <p className="text-sm text-red-600 mt-1">
+                  Los siguientes clientes tienen deuda de mas de 30 dias. Llamar para cobrar.
+                </p>
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              <div className="space-y-2">
+                {oldDebtClients.map((client, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-100">
+                    <div>
+                      <p className="font-semibold text-slate-800">{client.name}</p>
+                      <p className="text-xs text-slate-500">Lote: {client.lot}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-red-600">${client.debt.toLocaleString('es-AR')}</p>
+                      <p className="text-xs text-red-500">{client.days} dias</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-slate-200 p-4">
+              <button
+                onClick={() => setShowOldDebtWarning(false)}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl transition-colors"
+              >
+                Aceptar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex flex-col md:flex-row gap-3">
@@ -587,5 +658,6 @@ export default function Ventas({ shift }: VentasProps) {
           </div>
         </div>
       </div>
+    </>
   );
 }
