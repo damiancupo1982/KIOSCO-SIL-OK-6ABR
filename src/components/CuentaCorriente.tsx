@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Clock,
   Receipt,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface CuentaCorrienteProps {
@@ -37,6 +38,8 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
 
   const [invoiceSale, setInvoiceSale] = useState<Sale | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
+  const [showOldDebtWarning, setShowOldDebtWarning] = useState(false);
+  const [oldDebtClients, setOldDebtClients] = useState<{ name: string; lot: string; debt: number; days: number }[]>([]);
 
   useEffect(() => {
     loadData();
@@ -57,6 +60,31 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
     setAccounts(accountsData || []);
     setTransactions(txData || []);
     setLoading(false);
+
+    // Check for old debts (> 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const debtors = (accountsData || []).filter(a => Number(a.total_debt) > 0);
+    const oldDebts: { name: string; lot: string; debt: number; days: number }[] = [];
+    for (const acct of debtors) {
+      const acctTxs = (txData || []).filter(
+        (t: CurrentAccountTransaction) => t.customer_account_id === acct.id && t.type === 'cargo'
+      );
+      if (acctTxs.length > 0) {
+        const oldest = acctTxs.reduce((o: CurrentAccountTransaction, t: CurrentAccountTransaction) =>
+          new Date(t.created_at) < new Date(o.created_at) ? t : o
+        );
+        const daysOld = Math.floor((Date.now() - new Date(oldest.created_at).getTime()) / (1000 * 60 * 60 * 24));
+        if (daysOld > 30) {
+          oldDebts.push({ name: acct.customer_name, lot: acct.customer_lot, debt: Number(acct.total_debt), days: daysOld });
+        }
+      }
+    }
+    if (oldDebts.length > 0) {
+      oldDebts.sort((a, b) => b.days - a.days);
+      setOldDebtClients(oldDebts);
+      setShowOldDebtWarning(true);
+    }
   };
 
   const getAccountTransactions = (accountId: string) =>
@@ -262,6 +290,48 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
 
   return (
     <div className="space-y-6">
+      {/* Old Debt Warning Modal */}
+      {showOldDebtWarning && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col animate-in">
+            <div className="bg-red-50 border-b border-red-100 rounded-t-2xl p-5 flex items-start gap-4">
+              <div className="bg-red-100 p-3 rounded-full flex-shrink-0">
+                <AlertTriangle className="w-7 h-7 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-red-800">Deudas Antiguas Detectadas</h3>
+                <p className="text-sm text-red-600 mt-1">
+                  Los siguientes clientes tienen deuda de mas de 30 dias. Llamar para cobrar.
+                </p>
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1 p-4">
+              <div className="space-y-2">
+                {oldDebtClients.map((client, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-100">
+                    <div>
+                      <p className="font-semibold text-slate-800">{client.name}</p>
+                      <p className="text-xs text-slate-500">Lote: {client.lot}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-bold text-red-600">${client.debt.toLocaleString('es-AR')}</p>
+                      <p className="text-xs text-red-500">{client.days} dias</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-slate-200 p-4">
+              <button
+                onClick={() => setShowOldDebtWarning(false)}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl transition-colors"
+              >
+                Aceptar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <h3 className="text-xl font-bold text-slate-800">Cuentas Corrientes</h3>
         <div className="flex gap-2 flex-wrap">
