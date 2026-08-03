@@ -24,6 +24,7 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   const [transactions, setTransactions] = useState<CurrentAccountTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [balanceFilter, setBalanceFilter] = useState<'all' | 'debt' | 'zero'>('all');
   const [selectedAccount, setSelectedAccount] = useState<CustomerAccount | null>(null);
   const [expandedAccount, setExpandedAccount] = useState<string | null>(null);
   const [config, setConfig] = useState<Configuration | null>(null);
@@ -63,10 +64,13 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
 
   const filteredAccounts = accounts.filter((a) => {
     const q = search.toLowerCase();
-    return (
+    const matchesSearch =
       a.customer_name.toLowerCase().includes(q) ||
-      a.customer_lot.toLowerCase().includes(q)
-    );
+      a.customer_lot.toLowerCase().includes(q);
+    if (!matchesSearch) return false;
+    if (balanceFilter === 'debt') return Number(a.total_debt) > 0;
+    if (balanceFilter === 'zero') return Number(a.total_debt) === 0;
+    return true;
   });
 
   const totalDebt = accounts.reduce((sum, a) => sum + Number(a.total_debt), 0);
@@ -317,6 +321,27 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
           onChange={(e) => setSearch(e.target.value)}
           className="w-full pl-10 pr-4 py-3 bg-white border-2 border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-400 transition-all"
         />
+      </div>
+
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setBalanceFilter('all')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${balanceFilter === 'all' ? 'bg-amber-500 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+        >
+          Todos ({accounts.length})
+        </button>
+        <button
+          onClick={() => setBalanceFilter('debt')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${balanceFilter === 'debt' ? 'bg-red-500 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+        >
+          Con deuda ({accounts.filter(a => Number(a.total_debt) > 0).length})
+        </button>
+        <button
+          onClick={() => setBalanceFilter('zero')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${balanceFilter === 'zero' ? 'bg-green-500 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+        >
+          Saldo 0 ({accounts.filter(a => Number(a.total_debt) === 0).length})
+        </button>
       </div>
 
       <div className="space-y-3">
