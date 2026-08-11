@@ -32,7 +32,7 @@ export default function Ventas({ shift }: VentasProps) {
 
   useEffect(() => {
     loadMonthlyBalances();
-  }, [shift]);
+  }, []);
 
   const total = cart.reduce((sum, i) => sum + i.subtotal, 0);
 
@@ -68,9 +68,8 @@ export default function Ventas({ shift }: VentasProps) {
     };
     const ccDeuda = txs.filter(t => t.type === 'income' && t.payment_method === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
     const ccPagos = txs.filter(t => t.type === 'income' && t.category === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
-    const openingCash = shift ? Number(shift.opening_cash || 0) : 0;
     setMonthlyBalances({
-      cash: openingCash + calc('efectivo'),
+      cash: calc('efectivo'),
       transfer: calc('transferencia'),
       qr: calc('qr'),
       expensas: calc('expensas'),
