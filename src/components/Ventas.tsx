@@ -202,6 +202,11 @@ export default function Ventas({ shift }: VentasProps) {
     }
 
     const hasCuentaCorriente = payments.some((p) => p.method === 'cuenta_corriente');
+    if (hasCuentaCorriente && (!customerName.trim() || !customerLot.trim())) {
+      return alert(
+        'Para ventas en cuenta corriente es obligatorio ingresar el nombre y el número de lote del cliente.'
+      );
+    }
     const hasNonCash = payments.some((p) => p.method !== 'efectivo');
     if (hasNonCash && (!customerName.trim() || !customerLot.trim())) {
       return alert(
@@ -596,17 +601,25 @@ export default function Ventas({ shift }: VentasProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <input
                   type="text"
-                  placeholder="Nombre del cliente"
+                  placeholder={cuentaCorrienteAmount > 0 ? "Nombre del cliente (obligatorio)" : "Nombre del cliente"}
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500"
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-xl text-sm focus:ring-2 ${
+                    cuentaCorrienteAmount > 0 && !customerName.trim()
+                      ? 'border-red-400 focus:ring-red-400 animate-pulse'
+                      : 'border-slate-200 focus:ring-emerald-500'
+                  }`}
                 />
                 <input
                   type="text"
-                  placeholder="Lote"
+                  placeholder={cuentaCorrienteAmount > 0 ? "Lote (obligatorio)" : "Lote"}
                   value={customerLot}
                   onChange={(e) => setCustomerLot(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border-2 border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500"
+                  className={`w-full px-3 py-2 bg-white border-2 rounded-xl text-sm focus:ring-2 ${
+                    cuentaCorrienteAmount > 0 && !customerLot.trim()
+                      ? 'border-red-400 focus:ring-red-400 animate-pulse'
+                      : 'border-slate-200 focus:ring-emerald-500'
+                  }`}
                 />
               </div>
             </div>
