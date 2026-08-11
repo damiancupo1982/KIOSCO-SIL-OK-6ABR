@@ -28,8 +28,11 @@ export default function Ventas({ shift }: VentasProps) {
 
   useEffect(() => {
     loadProducts();
-    loadMonthlyBalances();
   }, []);
+
+  useEffect(() => {
+    loadMonthlyBalances();
+  }, [shift]);
 
   const total = cart.reduce((sum, i) => sum + i.subtotal, 0);
 
@@ -51,7 +54,8 @@ export default function Ventas({ shift }: VentasProps) {
 
   const loadMonthlyBalances = async () => {
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const ARG_OFFSET = 3;
+    const startOfMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, ARG_OFFSET, 0, 0, 0)).toISOString();
     const { data } = await supabase
       .from('cash_transactions')
       .select('*')
@@ -64,8 +68,9 @@ export default function Ventas({ shift }: VentasProps) {
     };
     const ccDeuda = txs.filter(t => t.type === 'income' && t.payment_method === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
     const ccPagos = txs.filter(t => t.type === 'income' && t.category === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
+    const openingCash = shift ? Number(shift.opening_cash || 0) : 0;
     setMonthlyBalances({
-      cash: calc('efectivo'),
+      cash: openingCash + calc('efectivo'),
       transfer: calc('transferencia'),
       qr: calc('qr'),
       expensas: calc('expensas'),
