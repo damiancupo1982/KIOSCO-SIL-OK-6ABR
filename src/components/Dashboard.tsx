@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag, UserCheck } from 'lucide-react';
-import { Shift, supabase, CashTransaction } from '../lib/supabase';
+import { Shift, supabase } from '../lib/supabase';
 import Ventas from './Ventas';
 import Stock from './Stock';
 import Caja from './Caja';
@@ -33,11 +33,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
   const [businessName, setBusinessName] = useState('Kiosco Damian');
   const [currentTime, setCurrentTime] = useState('');
 
-  const [cashInBox, setCashInBox] = useState(0);
-  const [transferInBox, setTransferInBox] = useState(0);
-  const [qrInBox, setQrInBox] = useState(0);
-  const [expensasInBox, setExpensasInBox] = useState(0);
-  const [cuentaCorrienteInBox, setCuentaCorrienteInBox] = useState(0);
+
 
   const [stats, setStats] = useState<SalesStats>({
     lucesToday: 0,
@@ -65,18 +61,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
     setCurrentTime(`${hours}:${minutes}`);
   };
 
-  useEffect(() => {
-    if (shift) {
-      loadTotals();
-    } else {
-      setCashInBox(0);
-      setTransferInBox(0);
-      setQrInBox(0);
-      setExpensasInBox(0);
-      setCuentaCorrienteInBox(0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shift]);
+
 
   const loadBusinessName = async () => {
     const { data } = await supabase
@@ -174,69 +159,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
     });
   };
 
-  const loadTotals = async () => {
-    if (!shift) return;
 
-    const { data } = await supabase
-      .from('cash_transactions')
-      .select('*')
-      .eq('shift_id', shift.id);
-
-    const transactions = (data || []) as CashTransaction[];
-
-    const openingCash = Number(shift.opening_cash || 0);
-
-    // Efectivo
-    const incomeCash = transactions
-      .filter(t => t.type === 'income' && t.payment_method === 'efectivo')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const expenseCash = transactions
-      .filter(t => t.type === 'expense' && t.payment_method === 'efectivo')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const cash = openingCash + incomeCash - expenseCash;
-
-    // Transferencias
-    const incomeTransfer = transactions
-      .filter(t => t.type === 'income' && t.payment_method === 'transferencia')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const expenseTransfer = transactions
-      .filter(t => t.type === 'expense' && t.payment_method === 'transferencia')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const transfer = incomeTransfer - expenseTransfer;
-
-    // QR
-    const incomeQr = transactions
-      .filter(t => t.type === 'income' && t.payment_method === 'qr')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const expenseQr = transactions
-      .filter(t => t.type === 'expense' && t.payment_method === 'qr')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const qr = incomeQr - expenseQr;
-
-    // Expensas
-    const incomeExpensas = transactions
-      .filter(t => t.type === 'income' && t.payment_method === 'expensas')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const expenseExpensas = transactions
-      .filter(t => t.type === 'expense' && t.payment_method === 'expensas')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const expensas = incomeExpensas - expenseExpensas;
-
-    // Cuenta Corriente: ventas a crédito (income) - pagos recibidos (income categoria cuenta_corriente con payment_method != cuenta_corriente)
-    const cuentaCorrienteDeuda = transactions
-      .filter(t => t.type === 'income' && t.payment_method === 'cuenta_corriente')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const cuentaCorrientePagos = transactions
-      .filter(t => t.type === 'income' && t.category === 'cuenta_corriente')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-    const cuentaCorriente = cuentaCorrienteDeuda - cuentaCorrientePagos;
-
-    setCashInBox(cash);
-    setTransferInBox(transfer);
-    setQrInBox(qr);
-    setExpensasInBox(expensas);
-    setCuentaCorrienteInBox(cuentaCorriente);
-  };
 
   const menuItems = [
     { id: 'ventas' as View, label: 'Ventas', icon: ShoppingCart, color: 'from-emerald-500 to-teal-600' },
@@ -294,54 +217,6 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-8">
-        {/* Tarjetas de totales por método de pago */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-          <div className="bg-white rounded-xl p-2 shadow border border-slate-200">
-            <p className="text-xs font-semibold text-slate-600">Caja Efectivo</p>
-            <p className="text-xl font-bold text-emerald-600">
-              {shift ? `$${cashInBox.toFixed(2)}` : '--'}
-            </p>
-            <p className="text-[10px] text-slate-500">
-              Inicial + ingresos - egresos en efectivo
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-2 shadow border border-slate-200">
-            <p className="text-xs font-semibold text-slate-600">Transferencias</p>
-            <p className="text-xl font-bold text-slate-800">
-              {shift ? `$${transferInBox.toFixed(2)}` : '--'}
-            </p>
-            <p className="text-[10px] text-slate-500">
-              Ingresos - egresos por transferencia
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-2 shadow border border-slate-200">
-            <p className="text-xs font-semibold text-slate-600">QR</p>
-            <p className="text-xl font-bold text-slate-800">
-              {shift ? `$${qrInBox.toFixed(2)}` : '--'}
-            </p>
-            <p className="text-[10px] text-slate-500">
-              Ingresos - egresos por QR
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-2 shadow border border-slate-200">
-            <p className="text-xs font-semibold text-slate-600">Expensas</p>
-            <p className="text-xl font-bold text-slate-800">
-              {shift ? `$${expensasInBox.toFixed(2)}` : '--'}
-            </p>
-            <p className="text-[10px] text-slate-500">
-              Ingresos - egresos por expensas
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-2 shadow border border-amber-200">
-            <p className="text-xs font-semibold text-amber-700">Cta. Corriente</p>
-            <p className="text-xl font-bold text-amber-600">
-              {shift ? `$${cuentaCorrienteInBox.toFixed(2)}` : '--'}
-            </p>
-            <p className="text-[10px] text-slate-500">
-              Ventas a crédito - pagos recibidos
-            </p>
-          </div>
-        </div>
 
         {/* Tarjetas de estadísticas de ventas */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
