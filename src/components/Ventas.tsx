@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { supabase, Product, SaleItem, Shift } from '../lib/supabase';
-import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, BookOpen, AlertTriangle } from 'lucide-react';
+import { supabase, Product, SaleItem, Shift, CashTransaction } from '../lib/supabase';
+import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, BookOpen, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
 
 interface VentasProps {
   shift: Shift | null;
@@ -22,11 +22,13 @@ export default function Ventas({ shift }: VentasProps) {
   const [expensasAmount, setExpensasAmount] = useState(0);
   const [cuentaCorrienteAmount, setCuentaCorrienteAmount] = useState(0);
 
+  const [monthlyBalances, setMonthlyBalances] = useState({ cash: 0, transfer: 0, qr: 0, expensas: 0, cuentaCorriente: 0 });
   const [showOldDebtWarning, setShowOldDebtWarning] = useState(false);
   const [oldDebtClients, setOldDebtClients] = useState<{ name: string; lot: string; debt: number; days: number }[]>([]);
 
   useEffect(() => {
     loadProducts();
+    loadMonthlyBalances();
   }, []);
 
   const total = cart.reduce((sum, i) => sum + i.subtotal, 0);
@@ -46,6 +48,30 @@ export default function Ventas({ shift }: VentasProps) {
       setCuentaCorrienteAmount(0);
     }
   }, [total]);
+
+  const loadMonthlyBalances = async () => {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const { data } = await supabase
+      .from('cash_transactions')
+      .select('*')
+      .gte('created_at', startOfMonth);
+    const txs = (data || []) as CashTransaction[];
+    const calc = (method: string) => {
+      const inc = txs.filter(t => t.type === 'income' && t.payment_method === method).reduce((s, t) => s + Number(t.amount), 0);
+      const exp = txs.filter(t => t.type === 'expense' && t.payment_method === method).reduce((s, t) => s + Number(t.amount), 0);
+      return inc - exp;
+    };
+    const ccDeuda = txs.filter(t => t.type === 'income' && t.payment_method === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
+    const ccPagos = txs.filter(t => t.type === 'income' && t.category === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
+    setMonthlyBalances({
+      cash: calc('efectivo'),
+      transfer: calc('transferencia'),
+      qr: calc('qr'),
+      expensas: calc('expensas'),
+      cuentaCorriente: ccDeuda - ccPagos,
+    });
+  };
 
   const loadProducts = async () => {
     const { data } = await supabase
@@ -326,6 +352,7 @@ export default function Ventas({ shift }: VentasProps) {
     }
 
     alert('Venta completada');
+    loadMonthlyBalances();
 
     setCart([]);
     setCustomerName('');
@@ -404,6 +431,32 @@ export default function Ventas({ shift }: VentasProps) {
           </div>
         </div>
       )}
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-5">
+      {[
+        { label: 'Efectivo', value: monthlyBalances.cash, icon: Banknote, color: 'emerald' },
+        { label: 'Transferencias', value: monthlyBalances.transfer, icon: ArrowRightLeft, color: 'blue' },
+        { label: 'QR', value: monthlyBalances.qr, icon: QrCode, color: 'violet' },
+        { label: 'Expensas', value: monthlyBalances.expensas, icon: Building2, color: 'slate' },
+        { label: 'Cta. Corriente', value: monthlyBalances.cuentaCorriente, icon: Wallet, color: 'amber' },
+      ].map(card => (
+        <div key={card.label} className={`bg-white rounded-xl p-3 shadow border ${
+          card.color === 'amber' ? 'border-amber-200' : 'border-slate-200'
+        }`}>
+          <div className="flex items-center gap-2 mb-1">
+            <card.icon size={14} className={`text-${card.color}-500`} />
+            <p className={`text-xs font-semibold ${
+              card.color === 'amber' ? 'text-amber-700' : 'text-slate-600'
+            }`}>{card.label}</p>
+          </div>
+          <p className={`text-lg font-bold ${
+            card.value < 0 ? 'text-red-600' : card.color === 'emerald' ? 'text-emerald-600' : card.color === 'amber' ? 'text-amber-600' : 'text-slate-800'
+          }`}>
+            ${card.value.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
+          </p>
+          <p className="text-[10px] text-slate-400">Mes en curso</p>
+        </div>
+      ))}
+    </div>
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex flex-col md:flex-row gap-3">
