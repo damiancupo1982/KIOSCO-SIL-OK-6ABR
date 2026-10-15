@@ -4,7 +4,7 @@ import { supabase, CourtSession, CourtSessionItem, Product, SaleItem, Shift } fr
 import CloseTurnoModal from './CloseTurnoModal';
 import GuestChargeRow from './GuestChargeRow';
 import OpenCourtModal from './OpenCourtModal';
-import { courtLabel, formatClock, formatDuration, money, rpcErrorMessage } from './reservasUtils';
+import { courtLabel, formatClock, formatDuration, isGuestProduct, money, rpcErrorMessage } from './reservasUtils';
 
 interface TurnoViewProps {
   sessionId: string;
@@ -64,7 +64,10 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
     items.filter((i) => i.product_id === productId).reduce((s, i) => s + i.quantity, 0);
 
   const filtered = useMemo(
-    () => products.filter((p) => p.stock > 0 && p.name.toLowerCase().includes(search.toLowerCase())),
+    () =>
+      products.filter(
+        (p) => p.stock > 0 && !isGuestProduct(p.name) && p.name.toLowerCase().includes(search.toLowerCase())
+      ),
     [products, search]
   );
 
@@ -360,7 +363,7 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
           </div>
           {isOpen && !guestItem && (
             <button
-              onClick={() => setGuestCharge(1, 12000)}
+              onClick={() => setGuestCharge(1, Number(products.find((p) => isGuestProduct(p.name))?.price ?? 12000))}
               disabled={busy}
               className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border-2 border-dashed border-red-200 text-red-700 hover:bg-red-50 text-sm font-semibold"
             >

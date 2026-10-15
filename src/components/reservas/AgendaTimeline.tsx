@@ -107,27 +107,27 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
                 .map((b) => {
                   const meta = EVENT_META[b.kind];
                   const blockHeight = Math.max(top(b.endMin) - top(b.startMin), 22);
-                  const clickable = b.kind !== 'jugado';
+                  const readOnly = b.kind === 'jugado';
+                  const compact = blockHeight <= 34;
                   return (
                     <div
                       key={b.key}
-                      role={clickable ? 'button' : undefined}
+                      role="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (clickable) onBlockClick(b);
+                        onBlockClick(b);
                       }}
                       title={`${hhmmOf(b.startMin)} - ${hhmmOf(b.endMin)} ${meta.label}\n${b.headline}${b.detail ? `\n${b.detail}` : ''}`}
-                      className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all ${meta.block} ${
-                        clickable ? 'cursor-pointer hover:shadow-md hover:z-10' : 'cursor-default'
-                      }`}
+                      className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all cursor-pointer hover:shadow-md hover:z-10 ${meta.block}`}
                       style={{ top: top(b.startMin) + 1, height: blockHeight - 2 }}
                     >
                       <p className="font-bold flex items-center gap-1 truncate">
                         {hhmmOf(b.startMin)} - {hhmmOf(b.endMin)}
                         <span className="font-black tracking-wide">{meta.label}</span>
-                        {!clickable && <Lock size={10} className="shrink-0 opacity-60" />}
+                        {readOnly && <Lock size={10} className="shrink-0 opacity-60" />}
+                        {compact && <span className="font-semibold truncate">{b.headline}</span>}
                       </p>
-                      {blockHeight > 34 && <p className="truncate font-semibold">{b.headline}</p>}
+                      {!compact && <p className="truncate font-semibold">{b.headline}</p>}
                       {blockHeight > 50 && b.detail && <p className="truncate opacity-80">{b.detail}</p>}
                     </div>
                   );

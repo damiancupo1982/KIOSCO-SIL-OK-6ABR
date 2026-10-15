@@ -57,6 +57,8 @@ export const formatDuration = (fromTs: string, toTs?: string | null) => {
 export const money = (n: number) =>
   `$${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+export const isGuestProduct = (name: string) => /^invitado.*sin carnet/i.test(name.trim());
+
 export const minutesOf = (hhmm: string) => {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
@@ -110,7 +112,7 @@ export const EVENT_META: Record<
   },
   jugado: {
     label: 'TURNO JUGADO',
-    block: 'bg-stone-100 border-stone-400 text-stone-700',
+    block: 'bg-stone-100 border-stone-400 text-stone-700 hover:bg-stone-200',
     chip: 'bg-stone-500 text-white',
     button: 'bg-stone-500 text-white',
   },

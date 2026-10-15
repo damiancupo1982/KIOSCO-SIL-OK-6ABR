@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CalendarPlus, ChevronLeft, ChevronRight, GraduationCap, Lock, Trophy, Wrench } from 'lucide-react';
 import { supabase, CourtReservation, CourtSession } from '../../lib/supabase';
 import AgendaTimeline, { AgendaBlock, AgendaColumn } from './AgendaTimeline';
+import TurnoDetailModal from './TurnoDetailModal';
 import {
   COURTS,
   EVENT_META,
@@ -66,9 +67,9 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
   for (const s of sessions) {
     const date = localDateOf(s.opened_at);
     const startMin = minutesOf(formatClock(s.opened_at));
+    const linked = s.reservation_id ? byId.get(s.reservation_id) : undefined;
     let endMin: number;
     if (s.status === 'abierta') {
-      const linked = s.reservation_id ? byId.get(s.reservation_id) : undefined;
       const liveEnd = date === today ? nowMin : LAST_MINUTE;
       endMin = Math.max(liveEnd, linked ? minutesOf(formatTime(linked.end_time)) : 0, startMin + 30);
     } else {
@@ -81,7 +82,7 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
       date,
       startMin,
       endMin: Math.min(Math.max(endMin, startMin + 1), LAST_MINUTE),
-      headline: playerLabel(s.titular_lot, s.titular_name),
+      headline: linked ? playerLabel(linked.titular_lot, linked.titular_name) : playerLabel(s.titular_lot, s.titular_name),
       detail: s.status === 'abierta' ? `Turno #${s.session_number} en curso` : 'Cancha utilizada',
       sessionId: s.id,
     });
@@ -96,6 +97,7 @@ export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, 
   const [events, setEvents] = useState<CourtReservation[]>([]);
   const [sessions, setSessions] = useState<CourtSession[]>([]);
   const [error, setError] = useState('');
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const rangeStart = mode === 'dia' ? anchor : startOfWeekISO(anchor);
   const rangeEnd = mode === 'dia' ? anchor : addDaysISO(rangeStart, 6);
@@ -111,7 +113,7 @@ export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, 
         .select('*')
         .gte('reservation_date', rangeStart)
         .lte('reservation_date', rangeEnd)
-        .in('status', ['reservada', 'abierta'])
+        .in('status', ['reservada', 'abierta', 'cerrada'])
         .order('start_time'),
       supabase
         .from('court_sessions')
@@ -140,6 +142,7 @@ export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, 
   const handleBlock = (b: AgendaBlock) => {
     if (b.reservation) onEdit(b.reservation);
     else if (b.kind === 'en_juego' && b.sessionId) onOpenTurno(b.sessionId);
+    else if (b.kind === 'jugado' && b.sessionId) setDetailId(b.sessionId);
   };
 
   const today = todayISO();
@@ -254,7 +257,6 @@ export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, 
                     <button
                       key={b.key}
                       onClick={() => handleBlock(b)}
-                      disabled={b.kind === 'jugado'}
                       className={`w-full text-left px-2 py-1.5 rounded-lg border-l-4 text-[11px] leading-tight transition-colors ${EVENT_META[b.kind].block}`}
                     >
                       <p className="font-bold flex items-center gap-1">
@@ -281,6 +283,8 @@ export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, 
           />
         </div>
       )}
+
+      {detailId && <TurnoDetailModal sessionId={detailId} onClose={() => setDetailId(null)} />}
     </div>
   );
 }
