@@ -14,6 +14,8 @@ import {
   Clock,
   Receipt,
   AlertTriangle,
+  Trash2,
+  Lock,
 } from 'lucide-react';
 
 interface CuentaCorrienteProps {
@@ -36,8 +38,13 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   const [paymentMethod, setPaymentMethod] = useState('efectivo');
   const [paymentLoading, setPaymentLoading] = useState(false);
 
+  const [selectedTx, setSelectedTx] = useState<CurrentAccountTransaction | null>(null);
   const [invoiceSale, setInvoiceSale] = useState<Sale | null>(null);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
+  const [showDeleteKey, setShowDeleteKey] = useState(false);
+  const [deleteKey, setDeleteKey] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [showOldDebtWarning, setShowOldDebtWarning] = useState(false);
   const [oldDebtClients, setOldDebtClients] = useState<{ name: string; lot: string; debt: number; days: number }[]>([]);
 
@@ -158,12 +165,47 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   };
 
   const handleViewInvoice = async (tx: CurrentAccountTransaction) => {
+    setSelectedTx(tx);
+    setInvoiceSale(null);
     if (!tx.sale_id) return;
     setInvoiceLoading(true);
-    setInvoiceSale(null);
     const { data } = await supabase.from('sales').select('*').eq('id', tx.sale_id).maybeSingle();
     setInvoiceSale(data as Sale | null);
     setInvoiceLoading(false);
+  };
+
+  const closeTxModal = () => {
+    setSelectedTx(null);
+    setInvoiceSale(null);
+    setInvoiceLoading(false);
+    setShowDeleteKey(false);
+    setDeleteKey('');
+    setDeleteError('');
+  };
+
+  const handleDeleteCharge = async () => {
+    if (!selectedTx) return;
+    if (!deleteKey.trim()) {
+      setDeleteError('Ingresá la clave.');
+      return;
+    }
+    setDeleteLoading(true);
+    setDeleteError('');
+    const { error } = await supabase.rpc('delete_current_account_charge', {
+      p_transaction_id: selectedTx.id,
+      p_admin_key: deleteKey.trim(),
+    });
+    setDeleteLoading(false);
+    if (error) {
+      setDeleteError(
+        error.message.includes('invalid_key')
+          ? 'Clave incorrecta.'
+          : 'No se pudo eliminar el movimiento. Intentá de nuevo.'
+      );
+      return;
+    }
+    closeTxModal();
+    await loadData();
   };
 
   const formatDate = (iso: string) => {
@@ -516,13 +558,13 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
                           {accountTxs.map((tx) => (
                             <tr
                               key={tx.id}
-                              onClick={() => tx.sale_id && handleViewInvoice(tx)}
+                              onClick={() => (tx.sale_id || tx.type === 'cargo') && handleViewInvoice(tx)}
                               className={`transition-colors ${
-                                tx.sale_id
+                                tx.sale_id || tx.type === 'cargo'
                                   ? 'hover:bg-blue-50 cursor-pointer'
                                   : 'hover:bg-slate-50'
                               }`}
-                              title={tx.sale_id ? 'Ver factura de esta venta' : undefined}
+                              title={tx.sale_id || tx.type === 'cargo' ? 'Ver detalle / eliminar' : undefined}
                             >
                               <td className="px-3 py-2 text-slate-600">{formatDate(tx.created_at)}</td>
                               <td className="px-3 py-2 text-slate-500">{formatTime(tx.created_at)}</td>
@@ -571,24 +613,37 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
         })}
       </div>
 
-      {(invoiceSale || invoiceLoading) && (
+      {selectedTx && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-4 border-b flex-shrink-0">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <Receipt size={20} className="text-blue-500" />
-                Detalle de Venta
+                Detalle del Movimiento
               </h3>
               <button
-                onClick={() => { setInvoiceSale(null); setInvoiceLoading(false); }}
+                onClick={closeTxModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X size={22} />
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto">
-              {invoiceLoading ? (
+            <div className="p-6 overflow-y-auto space-y-4">
+              <div className={`rounded-xl p-4 flex items-center justify-between border ${
+                selectedTx.type === 'cargo' ? 'bg-red-50 border-red-100' : 'bg-emerald-50 border-emerald-100'
+              }`}>
+                <div>
+                  <p className="text-xs text-slate-500">{selectedTx.type === 'cargo' ? 'Cargo' : 'Pago'} - {formatDate(selectedTx.created_at)} {formatTime(selectedTx.created_at)}</p>
+                  <p className="font-semibold text-slate-800">{selectedTx.customer_name}</p>
+                  <p className="text-xs text-slate-500">Lote: {selectedTx.customer_lot || '-'}</p>
+                </div>
+                <p className={`text-xl font-bold ${selectedTx.type === 'cargo' ? 'text-red-600' : 'text-emerald-600'}`}>
+                  ${Number(selectedTx.amount).toFixed(2)}
+                </p>
+              </div>
+
+              {!selectedTx.sale_id ? null : invoiceLoading ? (
                 <div className="text-center py-8 text-slate-500">Cargando factura...</div>
               ) : !invoiceSale ? (
                 <div className="text-center py-8 text-slate-400">No se encontró la venta.</div>
@@ -666,6 +721,57 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
                 </div>
               )}
             </div>
+
+            {selectedTx.type === 'cargo' && (
+              <div className="border-t border-slate-200 p-4 flex-shrink-0">
+                {!showDeleteKey ? (
+                  <button
+                    onClick={() => setShowDeleteKey(true)}
+                    className="w-full py-3 border-2 border-red-200 text-red-600 hover:bg-red-50 rounded-xl font-semibold flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <Trash2 size={18} />
+                    Eliminar
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-slate-600">
+                      Se eliminará este cargo y se descontarán ${Number(selectedTx.amount).toFixed(2)} de la deuda del cliente. Ingresá la clave de Súper Administrador.
+                    </p>
+                    <div className="relative">
+                      <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="password"
+                        autoFocus
+                        value={deleteKey}
+                        onChange={(e) => { setDeleteKey(e.target.value); setDeleteError(''); }}
+                        onKeyDown={(e) => e.key === 'Enter' && handleDeleteCharge()}
+                        placeholder="Clave de Súper Administrador"
+                        className={`w-full pl-9 pr-4 py-2.5 border-2 rounded-xl focus:ring-2 ${
+                          deleteError ? 'border-red-400 focus:ring-red-400' : 'border-slate-200 focus:ring-red-400'
+                        }`}
+                      />
+                    </div>
+                    {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { setShowDeleteKey(false); setDeleteKey(''); setDeleteError(''); }}
+                        className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={handleDeleteCharge}
+                        disabled={deleteLoading}
+                        className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white rounded-xl font-semibold flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <Trash2 size={16} />
+                        {deleteLoading ? 'Eliminando...' : 'Confirmar'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
