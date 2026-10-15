@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, CustomerAccount, CurrentAccountTransaction, Sale, Shift, Configuration } from '../lib/supabase';
+import MergeSuggestions from './MergeSuggestions';
 import {
   Search,
   BookOpen,
@@ -104,15 +105,21 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
     transactions.filter((t) => t.customer_account_id === accountId);
 
   const filteredAccounts = accounts.filter((a) => {
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
     const matchesSearch =
       a.customer_name.toLowerCase().includes(q) ||
       a.customer_lot.toLowerCase().includes(q);
     if (!matchesSearch) return false;
     if (balanceFilter === 'debt') return Number(a.total_debt) > 0;
     if (balanceFilter === 'zero') return Number(a.total_debt) === 0;
+    if (!q) return Number(a.total_debt) > 0;
     return true;
   });
+
+  const hiddenZeroCount =
+    balanceFilter === 'all' && !search.trim()
+      ? accounts.filter((a) => Number(a.total_debt) === 0).length
+      : 0;
 
   const totalDebt = accounts.reduce((sum, a) => sum + Number(a.total_debt), 0);
   const debtors = accounts.filter((a) => Number(a.total_debt) > 0).length;
@@ -501,11 +508,20 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
         </button>
       </div>
 
+      <MergeSuggestions accounts={accounts} onMerged={loadData} />
+
       <div className="space-y-3">
         {filteredAccounts.length === 0 && (
           <div className="text-center py-10 text-slate-500">
-            No hay cuentas corrientes registradas
+            {search.trim() ? 'No se encontraron clientes' : 'No hay clientes con deuda'}
           </div>
+        )}
+
+        {hiddenZeroCount > 0 && (
+          <p className="text-sm text-slate-500 flex items-center gap-2">
+            <CheckCircle size={16} className="text-emerald-500" />
+            {hiddenZeroCount} {hiddenZeroCount === 1 ? 'cuenta con saldo 0 oculta' : 'cuentas con saldo 0 ocultas'}. Buscalas por nombre o lote para verlas.
+          </p>
         )}
 
         {filteredAccounts.map((account) => {

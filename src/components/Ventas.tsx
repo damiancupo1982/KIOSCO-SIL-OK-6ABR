@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { supabase, Product, SaleItem, Shift, CashTransaction } from '../lib/supabase';
 import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, BookOpen, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
 
+const LOTE_INCORRECTO_MSG = 'Lote incorrecto, por favor ingrese el lote correcto, es importante en ventas en cuenta corriente';
+
 interface VentasProps {
   shift: Shift | null;
 }
@@ -207,6 +209,9 @@ export default function Ventas({ shift }: VentasProps) {
         'Para ventas en cuenta corriente es obligatorio ingresar el nombre y el número de lote del cliente.'
       );
     }
+    if (hasCuentaCorriente && /^0+$/.test(customerLot.trim())) {
+      return alert(LOTE_INCORRECTO_MSG);
+    }
     const hasNonCash = payments.some((p) => p.method !== 'efectivo');
     if (hasNonCash && (!customerName.trim() || !customerLot.trim())) {
       return alert(
@@ -374,6 +379,8 @@ export default function Ventas({ shift }: VentasProps) {
     loadProducts();
     checkOldDebts();
   };
+
+  const invalidCcLot = cuentaCorrienteAmount > 0 && /^0+$/.test(customerLot.trim());
 
   const baseCategories = ['Bebida', 'Comida', 'Artículos de Deporte'];
   const categories = Array.from(
@@ -616,12 +623,18 @@ export default function Ventas({ shift }: VentasProps) {
                   value={customerLot}
                   onChange={(e) => setCustomerLot(e.target.value)}
                   className={`w-full px-3 py-2 bg-white border-2 rounded-xl text-sm focus:ring-2 ${
-                    cuentaCorrienteAmount > 0 && !customerLot.trim()
+                    cuentaCorrienteAmount > 0 && (!customerLot.trim() || invalidCcLot)
                       ? 'border-red-400 focus:ring-red-400 animate-pulse'
                       : 'border-slate-200 focus:ring-emerald-500'
                   }`}
                 />
               </div>
+              {invalidCcLot && (
+                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2 text-sm font-medium">
+                  <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+                  {LOTE_INCORRECTO_MSG}
+                </div>
+              )}
             </div>
 
             <div className="border-t-2 border-emerald-200 pt-4 space-y-3">
