@@ -130,6 +130,12 @@ export interface CourtReservation {
   court: number;
   reservation_date: string;
   start_time: string;
+  end_time: string;
+  event_type: 'reserva' | 'clase' | 'torneo' | 'mantenimiento';
+  event_group: string;
+  title: string;
+  professor: string;
+  student: string;
   titular_lot: string;
   titular_name: string;
   notes: string;

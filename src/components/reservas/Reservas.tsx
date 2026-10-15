@@ -2,17 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { CalendarDays, CalendarPlus, History, LayoutGrid } from 'lucide-react';
 import { supabase, CourtReservation, CourtSession, Shift } from '../../lib/supabase';
 import CourtCard from './CourtCard';
-import ReservationModal from './ReservationModal';
+import EventModal from './EventModal';
 import OpenCourtModal from './OpenCourtModal';
 import TurnoView from './TurnoView';
 import ReservationsCalendar from './ReservationsCalendar';
 import TurnosHistory from './TurnosHistory';
-import { COURTS, formatTime, nowTimeHHMM, todayISO } from './reservasUtils';
+import { COURTS, EventType, formatTime, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
 
 type Tab = 'canchas' | 'agenda' | 'historial';
 
-interface ReservationDraft {
-  reservation?: CourtReservation;
+interface EventDraft {
+  type: EventType;
+  event?: CourtReservation;
   court: number;
   date?: string;
   time?: string;
@@ -23,11 +24,6 @@ interface OpenDraft {
   reservation?: CourtReservation;
 }
 
-const minutesOf = (hhmm: string) => {
-  const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
-};
-
 export default function Reservas({ shift }: { shift: Shift | null }) {
   const userName = shift?.user_name ?? '';
   const [tab, setTab] = useState<Tab>('canchas');
@@ -35,7 +31,7 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
   const [sessions, setSessions] = useState<CourtSession[]>([]);
   const [totals, setTotals] = useState<Record<string, number>>({});
   const [todayReservations, setTodayReservations] = useState<CourtReservation[]>([]);
-  const [reservationDraft, setReservationDraft] = useState<ReservationDraft | null>(null);
+  const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
   const [openDraft, setOpenDraft] = useState<OpenDraft | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [loadError, setLoadError] = useState('');
@@ -82,11 +78,11 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
 
   const refresh = () => setRefreshKey((k) => k + 1);
 
-  const upcomingReservation = (court: number) => {
+  const courtEvents = (court: number) => {
     const now = minutesOf(nowTimeHHMM());
-    return todayReservations.find(
-      (r) => r.court === court && minutesOf(formatTime(r.start_time)) >= now - 60
-    );
+    const pending = todayReservations.filter((r) => r.court === court && minutesOf(formatTime(r.end_time)) > now);
+    const current = pending.find((r) => minutesOf(formatTime(r.start_time)) <= now + 60);
+    return { current, next: current ? undefined : pending[0] };
   };
 
   if (turnoId) {
@@ -129,7 +125,7 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
           ))}
         </div>
         <button
-          onClick={() => setReservationDraft({ court: 0 })}
+          onClick={() => setEventDraft({ type: 'reserva', court: 0 })}
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold shadow transition-colors"
         >
           <CalendarPlus size={18} /> Nueva reserva
@@ -142,7 +138,7 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
           {COURTS.map((court) => {
             const session = sessions.find((s) => s.court === court);
-            const reservation = session ? undefined : upcomingReservation(court);
+            const { current: reservation, next } = session ? { current: undefined, next: undefined } : courtEvents(court);
             return (
               <CourtCard
                 key={court}
@@ -150,9 +146,10 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
                 session={session}
                 sessionTotal={session ? totals[session.id] ?? 0 : 0}
                 reservation={reservation}
-                onSchedule={() => setReservationDraft({ court })}
+                nextEvent={next}
+                onSchedule={() => setEventDraft({ type: 'reserva', court })}
                 onOpen={() => setOpenDraft({ court })}
-                onViewReservation={() => reservation && setReservationDraft({ court, reservation })}
+                onViewReservation={() => reservation && setEventDraft({ type: reservation.event_type, court, event: reservation })}
                 onViewTurno={() => session && setTurnoId(session.id)}
               />
             );
@@ -163,31 +160,29 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
       {tab === 'agenda' && (
         <ReservationsCalendar
           refreshKey={refreshKey}
-          onEdit={(reservation) =>
-            reservation.status === 'abierta' && reservation.session_id
-              ? setTurnoId(reservation.session_id)
-              : setReservationDraft({ court: reservation.court, reservation })
-          }
-          onCreate={(court, date, time) => setReservationDraft({ court, date, time })}
+          onEdit={(event) => setEventDraft({ type: event.event_type, court: event.court, event })}
+          onOpenTurno={setTurnoId}
+          onCreate={(type, court, date, time) => setEventDraft({ type, court, date, time })}
         />
       )}
 
       {tab === 'historial' && <TurnosHistory refreshKey={refreshKey} />}
 
-      {reservationDraft && (
-        <ReservationModal
-          reservation={reservationDraft.reservation}
-          defaultCourt={reservationDraft.court}
-          defaultDate={reservationDraft.date}
-          defaultTime={reservationDraft.time}
+      {eventDraft && (
+        <EventModal
+          type={eventDraft.type}
+          event={eventDraft.event}
+          defaultCourt={eventDraft.court}
+          defaultDate={eventDraft.date}
+          defaultTime={eventDraft.time}
           userName={userName}
-          onClose={() => setReservationDraft(null)}
+          onClose={() => setEventDraft(null)}
           onSaved={() => {
-            setReservationDraft(null);
+            setEventDraft(null);
             refresh();
           }}
           onOpenCourt={(reservation) => {
-            setReservationDraft(null);
+            setEventDraft(null);
             setOpenDraft({ court: reservation.court, reservation });
           }}
         />

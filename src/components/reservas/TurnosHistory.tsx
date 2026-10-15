@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { supabase, CourtReservation, CourtSession, CourtSessionItem } from '../../lib/supabase';
 import { PAYMENT_LABELS, PaymentMethod } from '../../lib/processSale';
-import { addDaysISO, formatClock, formatDateTime, formatDuration, formatTime, money, todayISO } from './reservasUtils';
+import { EVENT_META, addDaysISO, eventSummary, formatClock, formatDateTime, formatDuration, formatTime, money, todayISO } from './reservasUtils';
 
 interface SaleRef {
   id: string;
@@ -94,11 +94,11 @@ export default function TurnosHistory({ refreshKey }: { refreshKey: number }) {
       }));
       const reservationRows: Row[] = reservations.map((r) => ({
         key: r.id,
-        id: 'Reserva',
+        id: EVENT_META[r.event_type].label,
         court: r.court,
         date: `${r.reservation_date}T${formatTime(r.start_time)}:00-03:00`,
         apertura: formatTime(r.start_time),
-        cierre: '-',
+        cierre: formatTime(r.end_time),
         duracion: '-',
         estado: r.status === 'cancelada' ? 'Cancelada' : 'Reservada',
         reservation: r,
@@ -185,8 +185,12 @@ export default function TurnosHistory({ refreshKey }: { refreshKey: number }) {
                       <td className="px-3 py-3">{row.cierre}</td>
                       <td className="px-3 py-3">{row.duracion}</td>
                       <td className="px-3 py-3">
-                        <p className="font-semibold text-slate-800">{s?.titular_name ?? row.reservation?.titular_name}</p>
-                        <p className="text-xs text-slate-500">Lote {(s?.titular_lot ?? row.reservation?.titular_lot) || '-'}</p>
+                        <p className="font-semibold text-slate-800">
+                          {s?.titular_name ?? (row.reservation!.event_type === 'reserva' ? row.reservation!.titular_name : eventSummary(row.reservation!) || '-')}
+                        </p>
+                        {(s || row.reservation!.event_type === 'reserva') && (
+                          <p className="text-xs text-slate-500">Lote {(s?.titular_lot ?? row.reservation?.titular_lot) || '-'}</p>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-right font-bold">{s ? money(s.status === 'cerrada' ? s.total : rowItems.reduce((a, i) => a + Number(i.price) * i.quantity, 0)) : '-'}</td>
                       <td className="px-3 py-3 text-xs">{s ? paymentText(s) : '-'}</td>
@@ -239,7 +243,11 @@ export default function TurnosHistory({ refreshKey }: { refreshKey: number }) {
                             </div>
                           ) : (
                             <div className="text-slate-600 space-y-1">
-                              <p>Reserva para las {formatTime(row.reservation!.start_time)} (sin turno abierto).</p>
+                              <p>
+                                {EVENT_META[row.reservation!.event_type].label} de {formatTime(row.reservation!.start_time)} a{' '}
+                                {formatTime(row.reservation!.end_time)}
+                                {row.reservation!.event_type === 'reserva' && ' (sin turno abierto)'}.
+                              </p>
                               {row.reservation!.notes && <p>Observación: {row.reservation!.notes}</p>}
                             </div>
                           )}

@@ -1,12 +1,23 @@
 import { CalendarPlus, Clock, Eye, PlayCircle, User } from 'lucide-react';
 import { CourtReservation, CourtSession } from '../../lib/supabase';
-import { courtLabel, formatClock, formatDuration, formatTime, money } from './reservasUtils';
+import {
+  EVENT_META,
+  courtLabel,
+  eventSummary,
+  formatClock,
+  formatDuration,
+  formatTime,
+  minutesOf,
+  money,
+  nowTimeHHMM,
+} from './reservasUtils';
 
 interface CourtCardProps {
   court: number;
   session?: CourtSession;
   sessionTotal: number;
   reservation?: CourtReservation;
+  nextEvent?: CourtReservation;
   onSchedule: () => void;
   onOpen: () => void;
   onViewReservation: () => void;
@@ -18,12 +29,22 @@ export default function CourtCard({
   session,
   sessionTotal,
   reservation,
+  nextEvent,
   onSchedule,
   onOpen,
   onViewReservation,
   onViewTurno,
 }: CourtCardProps) {
   const state = session ? 'abierta' : reservation ? 'reservada' : 'libre';
+  const eventType = reservation?.event_type ?? 'reserva';
+  const inProgress = !!reservation && minutesOf(formatTime(reservation.start_time)) <= minutesOf(nowTimeHHMM());
+
+  const reservedTheme = {
+    reserva: { ring: 'border-sky-200 hover:border-sky-400', band: 'from-sky-500 to-blue-600', badge: 'bg-sky-100 text-sky-800', text: 'text-sky-700', soft: 'bg-sky-50' },
+    clase: { ring: 'border-emerald-200 hover:border-emerald-400', band: 'from-emerald-600 to-emerald-700', badge: 'bg-emerald-100 text-emerald-800', text: 'text-emerald-700', soft: 'bg-emerald-50' },
+    torneo: { ring: 'border-rose-200 hover:border-rose-400', band: 'from-rose-500 to-rose-600', badge: 'bg-rose-100 text-rose-800', text: 'text-rose-700', soft: 'bg-rose-50' },
+    mantenimiento: { ring: 'border-slate-300 hover:border-slate-500', band: 'from-slate-700 to-slate-800', badge: 'bg-slate-100 text-slate-800', text: 'text-slate-800', soft: 'bg-slate-100' },
+  }[eventType];
 
   const theme = {
     libre: {
@@ -33,10 +54,8 @@ export default function CourtCard({
       label: 'LIBRE',
     },
     reservada: {
-      ring: 'border-sky-200 hover:border-sky-400',
-      band: 'from-sky-500 to-blue-600',
-      badge: 'bg-sky-100 text-sky-800',
-      label: 'RESERVADA',
+      ...reservedTheme,
+      label: eventType === 'reserva' ? 'RESERVADA' : EVENT_META[eventType].label,
     },
     abierta: {
       ring: 'border-amber-300 hover:border-amber-500',
@@ -92,19 +111,29 @@ export default function CourtCard({
         {state === 'reservada' && reservation && (
           <div className="space-y-3 flex-1">
             <div className="text-center py-2">
-              <p className="text-5xl font-black text-sky-700 tracking-tight">{formatTime(reservation.start_time)}</p>
-              <p className="text-xs text-slate-500 uppercase mt-1">Hoy</p>
+              <p className={`text-3xl font-black tracking-tight ${reservedTheme.text}`}>
+                {formatTime(reservation.start_time)} - {formatTime(reservation.end_time)}
+              </p>
+              <p className="text-xs text-slate-500 uppercase mt-1">{inProgress ? 'En curso' : 'Hoy'}</p>
             </div>
-            <div className="bg-sky-50 rounded-xl p-3">
-              <p className="font-bold text-slate-800 truncate">{reservation.titular_name}</p>
-              <p className="text-sm text-slate-500">Lote {reservation.titular_lot || '-'}</p>
+            <div className={`${reservedTheme.soft} rounded-xl p-3`}>
+              <p className="text-[11px] font-black tracking-wide text-slate-500">{EVENT_META[eventType].label}</p>
+              <p className="font-bold text-slate-800 truncate">
+                {eventSummary(reservation) || (eventType === 'mantenimiento' ? 'Cancha bloqueada' : '-')}
+              </p>
+              {reservation.notes && <p className="text-sm text-slate-500 truncate">{reservation.notes}</p>}
             </div>
           </div>
         )}
 
         {state === 'libre' && (
-          <div className="flex-1 flex items-center justify-center py-8">
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 py-8">
             <p className="text-slate-400 text-sm">{courtLabel(court)} disponible</p>
+            {nextEvent && (
+              <p className="text-xs font-semibold text-slate-500 bg-slate-50 rounded-lg px-3 py-1.5">
+                Próximo: {formatTime(nextEvent.start_time)} - {formatTime(nextEvent.end_time)} {EVENT_META[nextEvent.event_type].label}
+              </p>
+            )}
           </div>
         )}
 
@@ -128,9 +157,9 @@ export default function CourtCard({
           {state === 'reservada' && (
             <button
               onClick={onViewReservation}
-              className="col-span-2 flex items-center justify-center gap-2 py-3 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold text-sm shadow transition-colors"
+              className={`col-span-2 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm shadow transition-colors ${EVENT_META[eventType].button}`}
             >
-              <Eye size={18} /> VER RESERVA
+              <Eye size={18} /> {eventType === 'reserva' ? 'VER RESERVA' : 'VER DETALLE'}
             </button>
           )}
           {state === 'abierta' && (

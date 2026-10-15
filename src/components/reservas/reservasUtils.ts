@@ -57,12 +57,85 @@ export const formatDuration = (fromTs: string, toTs?: string | null) => {
 export const money = (n: number) =>
   `$${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export const TIME_SLOTS = Array.from({ length: 33 }, (_, i) => {
-  const minutes = 7 * 60 + i * 30;
-  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-});
+export const minutesOf = (hhmm: string) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+};
+
+export const hhmmOf = (minutes: number) => {
+  const m = Math.max(0, Math.min(minutes, 23 * 60 + 59));
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+};
+
+export const localDateOf = (ts: string) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
+
+export type EventType = 'reserva' | 'clase' | 'torneo' | 'mantenimiento';
+
+export const EVENT_TYPES: EventType[] = ['reserva', 'clase', 'torneo', 'mantenimiento'];
+
+export const EVENT_META: Record<
+  EventType | 'en_juego' | 'jugado',
+  { label: string; block: string; chip: string; button: string }
+> = {
+  reserva: {
+    label: 'RESERVA',
+    block: 'bg-sky-100 border-sky-500 text-sky-900 hover:bg-sky-200',
+    chip: 'bg-sky-600 text-white',
+    button: 'bg-sky-600 hover:bg-sky-700 text-white',
+  },
+  clase: {
+    label: 'CLASE',
+    block: 'bg-emerald-100 border-emerald-500 text-emerald-900 hover:bg-emerald-200',
+    chip: 'bg-emerald-600 text-white',
+    button: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+  },
+  torneo: {
+    label: 'TORNEO',
+    block: 'bg-rose-100 border-rose-500 text-rose-900 hover:bg-rose-200',
+    chip: 'bg-rose-600 text-white',
+    button: 'bg-rose-600 hover:bg-rose-700 text-white',
+  },
+  mantenimiento: {
+    label: 'MANTENIMIENTO',
+    block: 'bg-slate-700 border-slate-900 text-white hover:bg-slate-800',
+    chip: 'bg-slate-800 text-white',
+    button: 'bg-slate-800 hover:bg-slate-900 text-white',
+  },
+  en_juego: {
+    label: 'EN JUEGO',
+    block: 'bg-amber-100 border-amber-500 text-amber-900 hover:bg-amber-200',
+    chip: 'bg-amber-500 text-white',
+    button: 'bg-amber-500 hover:bg-amber-600 text-white',
+  },
+  jugado: {
+    label: 'TURNO JUGADO',
+    block: 'bg-stone-100 border-stone-400 text-stone-700',
+    chip: 'bg-stone-500 text-white',
+    button: 'bg-stone-500 text-white',
+  },
+};
+
+export const eventSummary = (r: {
+  event_type: EventType;
+  titular_lot: string;
+  titular_name: string;
+  title: string;
+  professor: string;
+  student: string;
+}) => {
+  if (r.event_type === 'reserva') return `${r.titular_lot ? `Lote ${r.titular_lot} - ` : ''}${r.titular_name}`;
+  if (r.event_type === 'clase')
+    return [r.professor && `Profesor: ${r.professor}`, r.student].filter(Boolean).join(' · ');
+  return r.title;
+};
 
 export const RPC_ERRORS: Record<string, string> = {
+  invalid_event: 'Tipo de evento inválido.',
+  invalid_courts: 'Seleccione una cancha válida.',
+  invalid_time: 'La hora de fin debe ser posterior a la hora de inicio.',
+  title_required: 'Ingrese el nombre del torneo.',
+  event_not_editable: 'Este evento ya no puede modificarse (fue abierto, cerrado o cancelado).',
   court_already_open: 'Esta cancha ya tiene un turno abierto.',
   reservation_not_available: 'La reserva ya no está disponible (fue abierta o cancelada).',
   titular_required: 'Debe indicar el nombre del titular.',
@@ -73,6 +146,8 @@ export const RPC_ERRORS: Record<string, string> = {
 };
 
 export const rpcErrorMessage = (message: string | undefined) => {
+  const busy = message?.match(/court_busy:(\d{2}:\d{2})-(\d{2}:\d{2})/);
+  if (busy) return `Esta cancha ya se encuentra ocupada entre las ${busy[1]} y las ${busy[2]}.`;
   const key = Object.keys(RPC_ERRORS).find((k) => message?.includes(k));
   return key ? RPC_ERRORS[key] : `Ocurrió un error: ${message ?? 'desconocido'}`;
 };

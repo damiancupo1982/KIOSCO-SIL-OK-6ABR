@@ -1,14 +1,22 @@
-import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
-import { supabase, CourtReservation } from '../../lib/supabase';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CalendarPlus, ChevronLeft, ChevronRight, GraduationCap, Lock, Trophy, Wrench } from 'lucide-react';
+import { supabase, CourtReservation, CourtSession } from '../../lib/supabase';
+import AgendaTimeline, { AgendaBlock, AgendaColumn } from './AgendaTimeline';
 import {
   COURTS,
-  TIME_SLOTS,
+  EVENT_META,
+  EventType,
   addDaysISO,
   courtLabel,
+  eventSummary,
+  formatClock,
   formatDateLong,
   formatDateShort,
   formatTime,
+  hhmmOf,
+  localDateOf,
+  minutesOf,
+  nowTimeHHMM,
   startOfWeekISO,
   todayISO,
 } from './reservasUtils';
@@ -17,82 +25,147 @@ type Mode = 'dia' | 'semana' | 'cancha';
 
 interface ReservationsCalendarProps {
   refreshKey: number;
-  onEdit: (reservation: CourtReservation) => void;
-  onCreate: (court: number, date: string, time: string) => void;
+  onEdit: (event: CourtReservation) => void;
+  onOpenTurno: (sessionId: string) => void;
+  onCreate: (type: EventType, court: number, date: string, time?: string) => void;
 }
 
-const statusStyle: Record<CourtReservation['status'], string> = {
-  reservada: 'bg-sky-100 border-sky-300 text-sky-900 hover:bg-sky-200',
-  abierta: 'bg-amber-100 border-amber-300 text-amber-900',
-  cerrada: 'bg-slate-100 border-slate-300 text-slate-600',
-  cancelada: 'bg-red-50 border-red-200 text-red-400 line-through',
+const LAST_MINUTE = 23 * 60 + 59;
+
+const CREATE_BUTTONS: { type: EventType; label: string; icon: typeof Trophy }[] = [
+  { type: 'reserva', label: 'Registrar reserva', icon: CalendarPlus },
+  { type: 'clase', label: 'Registrar clase', icon: GraduationCap },
+  { type: 'torneo', label: 'Registrar torneo', icon: Trophy },
+  { type: 'mantenimiento', label: 'Mantenimiento', icon: Wrench },
+];
+
+const playerLabel = (lot: string, name: string) => `${lot ? `Lote ${lot} - ` : ''}${name}`;
+
+const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): AgendaBlock[] => {
+  const blocks: AgendaBlock[] = [];
+  const byId = new Map(events.map((e) => [e.id, e]));
+  const nowMin = minutesOf(nowTimeHHMM());
+  const today = todayISO();
+
+  for (const e of events) {
+    if (e.status !== 'reservada') continue;
+    const fallback = e.event_type === 'mantenimiento' ? 'Cancha bloqueada' : '';
+    blocks.push({
+      key: e.id,
+      kind: e.event_type,
+      court: e.court,
+      date: e.reservation_date,
+      startMin: minutesOf(formatTime(e.start_time)),
+      endMin: minutesOf(formatTime(e.end_time)),
+      headline: eventSummary(e) || fallback,
+      detail: e.notes,
+      reservation: e,
+    });
+  }
+
+  for (const s of sessions) {
+    const date = localDateOf(s.opened_at);
+    const startMin = minutesOf(formatClock(s.opened_at));
+    let endMin: number;
+    if (s.status === 'abierta') {
+      const linked = s.reservation_id ? byId.get(s.reservation_id) : undefined;
+      const liveEnd = date === today ? nowMin : LAST_MINUTE;
+      endMin = Math.max(liveEnd, linked ? minutesOf(formatTime(linked.end_time)) : 0, startMin + 30);
+    } else {
+      endMin = s.closed_at && localDateOf(s.closed_at) === date ? minutesOf(formatClock(s.closed_at)) : LAST_MINUTE;
+    }
+    blocks.push({
+      key: s.id,
+      kind: s.status === 'abierta' ? 'en_juego' : 'jugado',
+      court: s.court,
+      date,
+      startMin,
+      endMin: Math.min(Math.max(endMin, startMin + 1), LAST_MINUTE),
+      headline: playerLabel(s.titular_lot, s.titular_name),
+      detail: s.status === 'abierta' ? `Turno #${s.session_number} en curso` : 'Cancha utilizada',
+      sessionId: s.id,
+    });
+  }
+  return blocks.sort((a, b) => a.startMin - b.startMin);
 };
 
-export default function ReservationsCalendar({ refreshKey, onEdit, onCreate }: ReservationsCalendarProps) {
+export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, onCreate }: ReservationsCalendarProps) {
   const [mode, setMode] = useState<Mode>('dia');
   const [anchor, setAnchor] = useState(todayISO());
   const [court, setCourt] = useState(0);
-  const [reservations, setReservations] = useState<CourtReservation[]>([]);
+  const [events, setEvents] = useState<CourtReservation[]>([]);
+  const [sessions, setSessions] = useState<CourtSession[]>([]);
   const [error, setError] = useState('');
 
   const rangeStart = mode === 'dia' ? anchor : startOfWeekISO(anchor);
   const rangeEnd = mode === 'dia' ? anchor : addDaysISO(rangeStart, 6);
-  const days = mode === 'dia' ? [anchor] : Array.from({ length: 7 }, (_, i) => addDaysISO(rangeStart, i));
+  const days = useMemo(
+    () => (mode === 'dia' ? [anchor] : Array.from({ length: 7 }, (_, i) => addDaysISO(rangeStart, i))),
+    [mode, anchor, rangeStart]
+  );
 
-  useEffect(() => {
-    (async () => {
-      const { data, error: dbError } = await supabase
+  const load = useCallback(async () => {
+    const [eventsRes, sessionsRes] = await Promise.all([
+      supabase
         .from('court_reservations')
         .select('*')
         .gte('reservation_date', rangeStart)
         .lte('reservation_date', rangeEnd)
-        .neq('status', 'cancelada')
-        .order('start_time');
-      if (dbError) {
-        setError('No se pudieron cargar las reservas.');
-        return;
-      }
-      setError('');
-      setReservations((data as CourtReservation[]) || []);
-    })();
-  }, [rangeStart, rangeEnd, refreshKey]);
+        .in('status', ['reservada', 'abierta'])
+        .order('start_time'),
+      supabase
+        .from('court_sessions')
+        .select('*')
+        .in('status', ['abierta', 'cerrada'])
+        .gte('opened_at', `${rangeStart}T03:00:00Z`)
+        .lt('opened_at', `${addDaysISO(rangeEnd, 1)}T03:00:00Z`),
+    ]);
+    if (eventsRes.error || sessionsRes.error) {
+      setError('No se pudo cargar la agenda.');
+      return;
+    }
+    setError('');
+    setEvents((eventsRes.data as CourtReservation[]) || []);
+    setSessions((sessionsRes.data as CourtSession[]) || []);
+  }, [rangeStart, rangeEnd]);
 
-  const find = (c: number, date: string, slot: string) =>
-    reservations.find((r) => r.court === c && r.reservation_date === date && formatTime(r.start_time) === slot);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, [load, refreshKey]);
 
-  const extraTimes = reservations.map((r) => formatTime(r.start_time)).filter((t) => !TIME_SLOTS.includes(t));
-  const slots = Array.from(new Set([...TIME_SLOTS, ...extraTimes])).sort();
+  const blocks = useMemo(() => buildBlocks(events, sessions), [events, sessions]);
+
+  const handleBlock = (b: AgendaBlock) => {
+    if (b.reservation) onEdit(b.reservation);
+    else if (b.kind === 'en_juego' && b.sessionId) onOpenTurno(b.sessionId);
+  };
+
+  const today = todayISO();
+  const columns: AgendaColumn[] =
+    mode === 'dia'
+      ? COURTS.map((c) => ({ key: `c${c}`, label: courtLabel(c), court: c, date: anchor }))
+      : days.map((d) => ({ key: d, label: formatDateShort(d), court, date: d, highlight: d === today }));
 
   const step = mode === 'dia' ? 1 : 7;
-
-  const renderCell = (c: number, date: string, slot: string) => {
-    const r = find(c, date, slot);
-    if (r) {
-      return (
-        <button
-          onClick={() => onEdit(r)}
-          className={`w-full h-full min-h-[40px] text-left px-2 py-1 rounded-lg border text-xs transition-colors ${statusStyle[r.status]}`}
-        >
-          <p className="font-bold truncate">{r.titular_name}</p>
-          <p className="opacity-75">
-            Lote {r.titular_lot || '-'}
-            {mode === 'semana' && ` · C${r.court}`}
-          </p>
-        </button>
-      );
-    }
-    return (
-      <button
-        onClick={() => onCreate(c, date, slot)}
-        className="group w-full h-full min-h-[40px] rounded-lg border border-dashed border-transparent hover:border-sky-300 hover:bg-sky-50 flex items-center justify-center"
-      >
-        <Plus size={14} className="text-sky-500 opacity-0 group-hover:opacity-100" />
-      </button>
-    );
-  };
+  const createCourt = mode === 'cancha' ? court : 0;
+  const createDate = anchor < today ? today : anchor;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
+      <div className="flex flex-wrap gap-2 p-4 border-b border-slate-100">
+        {CREATE_BUTTONS.map((btn) => (
+          <button
+            key={btn.type}
+            onClick={() => onCreate(btn.type, createCourt, createDate)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all hover:-translate-y-0.5 hover:shadow ${EVENT_META[btn.type].button}`}
+          >
+            <btn.icon size={16} /> {btn.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-100">
         <div className="flex bg-slate-100 rounded-xl p-1">
           {(['dia', 'semana', 'cancha'] as Mode[]).map((m) => (
@@ -137,87 +210,75 @@ export default function ReservationsCalendar({ refreshKey, onEdit, onCreate }: R
           <button onClick={() => setAnchor(addDaysISO(anchor, step))} className="p-2 rounded-lg hover:bg-slate-100">
             <ChevronRight size={18} />
           </button>
-          <button
-            onClick={() => setAnchor(todayISO())}
-            className="px-3 py-2 rounded-lg text-sm font-semibold text-sky-700 hover:bg-sky-50"
-          >
+          <button onClick={() => setAnchor(todayISO())} className="px-3 py-2 rounded-lg text-sm font-semibold text-sky-700 hover:bg-sky-50">
             Hoy
           </button>
         </div>
       </div>
 
-      {error && <p className="px-4 pt-3 text-sm text-red-600">{error}</p>}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-3">
+        <p className="text-sm font-semibold text-slate-600 capitalize">
+          {mode === 'dia'
+            ? formatDateLong(anchor)
+            : `Semana del ${formatDateShort(rangeStart)} al ${formatDateShort(rangeEnd)}${mode === 'cancha' ? ` · ${courtLabel(court)}` : ''}`}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {(Object.keys(EVENT_META) as (keyof typeof EVENT_META)[]).map((k) => (
+            <span key={k} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+              <span className={`w-2.5 h-2.5 rounded-sm ${EVENT_META[k].chip}`} />
+              {EVENT_META[k].label}
+            </span>
+          ))}
+        </div>
+      </div>
 
-      <p className="px-4 pt-3 text-sm font-semibold text-slate-600 capitalize">
-        {mode === 'dia'
-          ? formatDateLong(anchor)
-          : `Semana del ${formatDateShort(rangeStart)} al ${formatDateShort(rangeEnd)}${mode === 'cancha' ? ` · ${courtLabel(court)}` : ''}`}
-      </p>
+      {error && <p className="px-4 pt-3 text-sm text-red-600">{error}</p>}
 
       {mode === 'semana' ? (
         <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
           {days.map((d) => {
-            const dayRes = reservations.filter((r) => r.reservation_date === d);
+            const dayBlocks = blocks.filter((b) => b.date === d);
             return (
-              <div key={d} className={`rounded-xl border p-2 min-h-[120px] ${d === todayISO() ? 'border-sky-300 bg-sky-50/40' : 'border-slate-200'}`}>
-                <p className="text-xs font-bold uppercase text-slate-500 mb-2 capitalize">{formatDateShort(d)}</p>
+              <div
+                key={d}
+                className={`rounded-xl border p-2 min-h-[120px] ${d === today ? 'border-sky-300 bg-sky-50/40' : 'border-slate-200'}`}
+              >
+                <button
+                  onClick={() => onCreate('reserva', 0, d < today ? today : d)}
+                  className="w-full text-left text-xs font-bold uppercase text-slate-500 mb-2 capitalize hover:text-sky-700"
+                >
+                  {formatDateShort(d)}
+                </button>
                 <div className="space-y-1.5">
-                  {dayRes.map((r) => (
+                  {dayBlocks.map((b) => (
                     <button
-                      key={r.id}
-                      onClick={() => onEdit(r)}
-                      className={`w-full text-left px-2 py-1.5 rounded-lg border text-xs ${statusStyle[r.status]}`}
+                      key={b.key}
+                      onClick={() => handleBlock(b)}
+                      disabled={b.kind === 'jugado'}
+                      className={`w-full text-left px-2 py-1.5 rounded-lg border-l-4 text-[11px] leading-tight transition-colors ${EVENT_META[b.kind].block}`}
                     >
-                      <p className="font-bold">
-                        {formatTime(r.start_time)} · C{r.court}
+                      <p className="font-bold flex items-center gap-1">
+                        {hhmmOf(b.startMin)}-{hhmmOf(b.endMin)} · C{b.court}
+                        {b.kind === 'jugado' && <Lock size={10} className="opacity-60" />}
                       </p>
-                      <p className="truncate">{r.titular_name}</p>
+                      <p className="font-black tracking-wide">{EVENT_META[b.kind].label}</p>
+                      <p className="truncate">{b.headline}</p>
                     </button>
                   ))}
-                  {dayRes.length === 0 && <p className="text-xs text-slate-300">Sin reservas</p>}
+                  {dayBlocks.length === 0 && <p className="text-xs text-slate-300">Sin eventos</p>}
                 </div>
               </div>
             );
           })}
         </div>
       ) : (
-        <div className="p-4 overflow-x-auto">
-          <table className="w-full border-separate border-spacing-1 min-w-[560px]">
-            <thead>
-              <tr>
-                <th className="w-16" />
-                {mode === 'dia'
-                  ? COURTS.map((c) => (
-                      <th key={c} className="text-sm font-bold text-slate-700 py-2">
-                        {courtLabel(c)}
-                      </th>
-                    ))
-                  : days.map((d) => (
-                      <th key={d} className={`text-xs font-bold py-2 capitalize ${d === todayISO() ? 'text-sky-700' : 'text-slate-600'}`}>
-                        {formatDateShort(d)}
-                      </th>
-                    ))}
-              </tr>
-            </thead>
-            <tbody>
-              {slots.map((slot) => (
-                <tr key={slot}>
-                  <td className="text-xs font-semibold text-slate-500 text-right pr-2 align-top pt-2">{slot}</td>
-                  {mode === 'dia'
-                    ? COURTS.map((c) => (
-                        <td key={c} className="bg-slate-50 rounded-lg p-0.5 align-top">
-                          {renderCell(c, anchor, slot)}
-                        </td>
-                      ))
-                    : days.map((d) => (
-                        <td key={d} className="bg-slate-50 rounded-lg p-0.5 align-top">
-                          {renderCell(court, d, slot)}
-                        </td>
-                      ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="p-4">
+          <AgendaTimeline
+            columns={columns}
+            blocks={blocks}
+            onBlockClick={handleBlock}
+            onEmptyClick={(c, d, time) => onCreate('reserva', c, d, time)}
+          />
         </div>
       )}
     </div>
