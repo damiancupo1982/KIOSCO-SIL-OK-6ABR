@@ -129,6 +129,11 @@ export default function TurnoDetailModal({ sessionId, onClose }: { sessionId: st
                   </div>
                 ))}
               </div>
+              {s.is_late_entry && (
+                <p className="mt-2 text-sm text-stone-600">
+                  Reserva jugada cargada posteriormente por {s.opened_by || 'sin usuario'}.
+                </p>
+              )}
               {reservation && (
                 <p className="mt-2 text-sm text-slate-600 flex items-center gap-2">
                   <CalendarCheck size={14} className="text-sky-600" />

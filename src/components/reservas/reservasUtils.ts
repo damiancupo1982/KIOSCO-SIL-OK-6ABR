@@ -145,6 +145,7 @@ export const RPC_ERRORS: Record<string, string> = {
   session_not_open: 'Este turno ya fue cerrado.',
   session_has_items: 'El turno tiene consumos: debe cobrarse.',
   invalid_guest_charge: 'Cantidad o precio de invitado inválido.',
+  played_in_future: 'Un turno jugado no puede terminar después de la hora actual.',
 };
 
 export const rpcErrorMessage = (message: string | undefined) => {

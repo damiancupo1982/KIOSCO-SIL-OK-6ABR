@@ -69,7 +69,9 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
     const startMin = minutesOf(formatClock(s.opened_at));
     const linked = s.reservation_id ? byId.get(s.reservation_id) : undefined;
     let endMin: number;
-    if (s.status === 'abierta') {
+    if (s.status === 'abierta' && s.is_late_entry && s.planned_end) {
+      endMin = localDateOf(s.planned_end) === date ? minutesOf(formatClock(s.planned_end)) : LAST_MINUTE;
+    } else if (s.status === 'abierta') {
       const liveEnd = date === today ? nowMin : LAST_MINUTE;
       endMin = Math.max(liveEnd, linked ? minutesOf(formatTime(linked.end_time)) : 0, startMin + 30);
     } else {
@@ -83,7 +85,12 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
       startMin,
       endMin: Math.min(Math.max(endMin, startMin + 1), LAST_MINUTE),
       headline: linked ? playerLabel(linked.titular_lot, linked.titular_name) : playerLabel(s.titular_lot, s.titular_name),
-      detail: s.status === 'abierta' ? `Turno #${s.session_number} en curso` : 'Cancha utilizada',
+      detail:
+        s.status !== 'abierta'
+          ? 'Cancha utilizada'
+          : s.is_late_entry
+            ? 'Reserva jugada pendiente de cerrar'
+            : `Turno #${s.session_number} en curso`,
       sessionId: s.id,
     });
   }

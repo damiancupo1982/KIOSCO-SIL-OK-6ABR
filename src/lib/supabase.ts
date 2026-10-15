@@ -163,6 +163,8 @@ export interface CourtSession {
   opened_by: string;
   closed_by: string;
   guest_charge_manual: boolean;
+  is_late_entry: boolean;
+  planned_end: string | null;
 }
 
 export interface CourtSessionItem {

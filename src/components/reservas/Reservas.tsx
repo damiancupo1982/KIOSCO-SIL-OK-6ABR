@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CalendarDays, CalendarPlus, History, LayoutGrid } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarPlus, ChevronRight, History, LayoutGrid } from 'lucide-react';
 import { supabase, CourtReservation, CourtSession, Shift } from '../../lib/supabase';
 import CourtCard from './CourtCard';
 import EventModal from './EventModal';
 import OpenCourtModal from './OpenCourtModal';
+import PlayedTurnoModal from './PlayedTurnoModal';
 import TurnoView from './TurnoView';
 import ReservationsCalendar from './ReservationsCalendar';
 import TurnosHistory from './TurnosHistory';
-import { COURTS, EventType, formatTime, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
+import {
+  COURTS,
+  courtLabel,
+  EventType,
+  formatClock,
+  formatDateTime,
+  formatTime,
+  minutesOf,
+  nowTimeHHMM,
+  todayISO,
+} from './reservasUtils';
 
 type Tab = 'canchas' | 'agenda' | 'historial';
 
@@ -29,10 +40,12 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
   const [tab, setTab] = useState<Tab>('canchas');
   const [turnoId, setTurnoId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<CourtSession[]>([]);
+  const [lateSessions, setLateSessions] = useState<CourtSession[]>([]);
   const [totals, setTotals] = useState<Record<string, number>>({});
   const [todayReservations, setTodayReservations] = useState<CourtReservation[]>([]);
   const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
   const [openDraft, setOpenDraft] = useState<OpenDraft | null>(null);
+  const [showPlayed, setShowPlayed] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [loadError, setLoadError] = useState('');
 
@@ -53,6 +66,7 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
     setLoadError('');
     const open = (sessionsRes.data as CourtSession[]) || [];
     setSessions(open);
+    setLateSessions(open.filter((s) => s.is_late_entry));
     setTodayReservations((reservationsRes.data as CourtReservation[]) || []);
 
     if (open.length) {
@@ -124,20 +138,51 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setEventDraft({ type: 'reserva', court: 0 })}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold shadow transition-colors"
-        >
-          <CalendarPlus size={18} /> Nueva reserva
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setShowPlayed(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border-2 border-stone-300 hover:border-stone-500 hover:bg-stone-50 text-stone-700 font-semibold shadow-sm transition-colors"
+          >
+            <CalendarCheck size={18} /> Reserva jugada
+          </button>
+          <button
+            onClick={() => setEventDraft({ type: 'reserva', court: 0 })}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold shadow transition-colors"
+          >
+            <CalendarPlus size={18} /> Nueva reserva
+          </button>
+        </div>
       </div>
+
+      {lateSessions.length > 0 && (
+        <div className="bg-stone-50 border-2 border-stone-200 rounded-2xl p-4 space-y-2">
+          <p className="text-sm font-bold text-stone-700">Reservas jugadas pendientes de cerrar</p>
+          <div className="flex flex-wrap gap-2">
+            {lateSessions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => setTurnoId(s.id)}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-stone-300 hover:border-stone-500 hover:shadow text-sm text-stone-800 transition-all"
+              >
+                <span className="font-semibold">{courtLabel(s.court)}</span>
+                <span className="text-stone-500">
+                  {formatDateTime(s.opened_at)} {formatClock(s.opened_at)}
+                  {s.planned_end && `-${formatClock(s.planned_end)}`}
+                </span>
+                <span className="font-semibold">{s.titular_name}</span>
+                <ChevronRight size={14} className="text-stone-400" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loadError && <p className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{loadError}</p>}
 
       {tab === 'canchas' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
           {COURTS.map((court) => {
-            const session = sessions.find((s) => s.court === court);
+            const session = sessions.find((s) => s.court === court && !s.is_late_entry);
             const { current: reservation, next } = session ? { current: undefined, next: undefined } : courtEvents(court);
             return (
               <CourtCard
@@ -184,6 +229,18 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
           onOpenCourt={(reservation) => {
             setEventDraft(null);
             setOpenDraft({ court: reservation.court, reservation });
+          }}
+        />
+      )}
+
+      {showPlayed && (
+        <PlayedTurnoModal
+          userName={userName}
+          onClose={() => setShowPlayed(false)}
+          onDone={(sessionId) => {
+            setShowPlayed(false);
+            refresh();
+            setTurnoId(sessionId);
           }}
         />
       )}

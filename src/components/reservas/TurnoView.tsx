@@ -4,7 +4,7 @@ import { supabase, CourtSession, CourtSessionItem, Product, SaleItem, Shift } fr
 import CloseTurnoModal from './CloseTurnoModal';
 import GuestChargeRow from './GuestChargeRow';
 import OpenCourtModal from './OpenCourtModal';
-import { courtLabel, formatClock, formatDuration, isGuestProduct, money, rpcErrorMessage } from './reservasUtils';
+import { courtLabel, formatClock, formatDateTime, formatDuration, isGuestProduct, money, rpcErrorMessage } from './reservasUtils';
 
 interface TurnoViewProps {
   sessionId: string;
@@ -56,6 +56,7 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
   }, [loadSession, loadItems, loadProducts]);
 
   const isOpen = session?.status === 'abierta';
+  const isLate = !!session?.is_late_entry;
   const total = items.reduce((s, i) => s + Number(i.price) * i.quantity, 0);
   const guestItem = items.find((i) => i.kind === 'invitado');
   const productItems = items.filter((i) => i.kind !== 'invitado');
@@ -172,6 +173,18 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
       onClosed();
     });
 
+  const discardLate = () =>
+    withBusy(async () => {
+      if (!window.confirm('¿Descartar esta reserva jugada? Se borrarán los jugadores y consumos cargados.')) return;
+      const { error } = await supabase.rpc('discard_played_court_session', { p_session_id: sessionId });
+      if (error) {
+        alert(rpcErrorMessage(error.message));
+        await loadSession();
+        return;
+      }
+      onClosed();
+    });
+
   if (loadError) {
     return (
       <div className="bg-white rounded-2xl p-8 text-center space-y-4">
@@ -205,7 +218,7 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
               isOpen ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
             }`}
           >
-            {isOpen ? 'EN JUEGO' : session.status.toUpperCase()}
+            {isOpen ? (isLate ? 'CARGA POSTERIOR' : 'EN JUEGO') : session.status.toUpperCase()}
           </span>
         </div>
       </div>
@@ -216,14 +229,17 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
           <p className="text-2xl font-bold">{courtLabel(session.court)}</p>
         </div>
         <div>
-          <p className="text-xs uppercase tracking-wide text-slate-400">Apertura</p>
-          <p className="text-2xl font-bold">{formatClock(session.opened_at)}</p>
+          <p className="text-xs uppercase tracking-wide text-slate-400">{isLate ? `Jugado el ${formatDateTime(session.opened_at)}` : 'Apertura'}</p>
+          <p className="text-2xl font-bold">
+            {formatClock(session.opened_at)}
+            {isLate && session.planned_end && ` - ${formatClock(session.planned_end)}`}
+          </p>
         </div>
         <div>
           <p className="text-xs uppercase tracking-wide text-slate-400">Tiempo</p>
           <p className="text-2xl font-bold flex items-center gap-2">
             <Clock size={18} className="text-amber-400" />
-            {formatDuration(session.opened_at, session.closed_at)}
+            {formatDuration(session.opened_at, session.closed_at ?? (isLate ? session.planned_end : null))}
           </p>
         </div>
         <div>
@@ -375,13 +391,24 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
             <span className="text-3xl font-bold text-emerald-600">{money(total)}</span>
           </div>
           {isOpen ? (
-            <button
-              onClick={handleCloseTurno}
-              disabled={busy}
-              className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-bold shadow-lg transition-colors"
-            >
-              <Lock size={20} /> CERRAR TURNO
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={handleCloseTurno}
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-bold shadow-lg transition-colors"
+              >
+                <Lock size={20} /> CERRAR TURNO
+              </button>
+              {isLate && (
+                <button
+                  onClick={discardLate}
+                  disabled={busy}
+                  className="w-full py-2 rounded-xl text-sm font-semibold text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  Descartar reserva jugada
+                </button>
+              )}
+            </div>
           ) : (
             <p className="text-center text-sm text-slate-500">Turno cerrado {session.closed_at && `a las ${formatClock(session.closed_at)}`}</p>
           )}
