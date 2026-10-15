@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag, UserCheck } from 'lucide-react';
+import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag, UserCheck, CalendarDays } from 'lucide-react';
 import { Shift, supabase } from '../lib/supabase';
 import Ventas from './Ventas';
 import Stock from './Stock';
@@ -10,8 +10,9 @@ import Movimientos from './Movimientos';
 import CuentaCorriente from './CuentaCorriente';
 import Compras from './Compras';
 import Socios from './Socios';
+import Reservas from './reservas/Reservas';
 
-type View = 'ventas' | 'stock' | 'caja' | 'reportes' | 'configuracion' | 'movimientos' | 'cuentacorriente' | 'compras' | 'socios';
+type View = 'ventas' | 'stock' | 'caja' | 'reportes' | 'configuracion' | 'movimientos' | 'cuentacorriente' | 'compras' | 'socios' | 'reservas';
 
 interface DashboardProps {
   shift: Shift | null;
@@ -163,6 +164,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
 
   const menuItems = [
     { id: 'ventas' as View, label: 'Ventas', icon: ShoppingCart, color: 'from-emerald-500 to-teal-600' },
+    { id: 'reservas' as View, label: 'Reservas', icon: CalendarDays, color: 'from-sky-500 to-blue-600' },
     { id: 'stock' as View, label: 'Inventario', icon: Package, color: 'from-blue-500 to-cyan-600' },
     { id: 'movimientos' as View, label: 'Movimientos', icon: Clock, color: 'from-teal-500 to-emerald-600' },
     { id: 'caja' as View, label: 'Caja', icon: Wallet, color: 'from-slate-600 to-slate-700' },
@@ -341,6 +343,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
                 {currentView === 'cuentacorriente' && <CuentaCorriente shift={shift} />}
                 {currentView === 'compras' && <Compras shift={shift} />}
                 {currentView === 'socios' && <Socios />}
+                {currentView === 'reservas' && <Reservas shift={shift} />}
                 {currentView === 'reportes' && <Reportes />}
                 {currentView === 'configuracion' && <Configuracion />}
               </div>

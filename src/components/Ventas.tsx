@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, SaleItem, Shift, CashTransaction } from '../lib/supabase';
-import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, BookOpen, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
-
-const LOTE_INCORRECTO_MSG = 'Lote incorrecto, por favor ingrese el lote correcto, es importante en ventas en cuenta corriente';
+import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
+import { EMPTY_PAYMENTS, LOTE_INCORRECTO_MSG, PaymentAmounts, isInvalidCcLot, preparePayments, processSale } from '../lib/processSale';
+import PaymentFields from './PaymentFields';
 
 interface VentasProps {
   shift: Shift | null;
@@ -18,11 +18,8 @@ export default function Ventas({ shift }: VentasProps) {
   const [customerName, setCustomerName] = useState('');
   const [customerLot, setCustomerLot] = useState('');
 
-  const [cashAmount, setCashAmount] = useState(0);
-  const [transferAmount, setTransferAmount] = useState(0);
-  const [qrAmount, setQrAmount] = useState(0);
-  const [expensasAmount, setExpensasAmount] = useState(0);
-  const [cuentaCorrienteAmount, setCuentaCorrienteAmount] = useState(0);
+  const [amounts, setAmounts] = useState<PaymentAmounts>(EMPTY_PAYMENTS);
+  const cuentaCorrienteAmount = amounts.cuenta_corriente;
 
   const [monthlyBalances, setMonthlyBalances] = useState({ cash: 0, transfer: 0, qr: 0, expensas: 0, cuentaCorriente: 0 });
   const [showOldDebtWarning, setShowOldDebtWarning] = useState(false);
@@ -39,18 +36,14 @@ export default function Ventas({ shift }: VentasProps) {
   const total = cart.reduce((sum, i) => sum + i.subtotal, 0);
 
   useEffect(() => {
-    const sum = cashAmount + transferAmount + qrAmount + expensasAmount + cuentaCorrienteAmount;
+    const sum = Object.values(amounts).reduce((a, b) => a + b, 0);
 
     if (total > 0 && sum === 0) {
-      setCashAmount(total);
+      setAmounts({ ...EMPTY_PAYMENTS, efectivo: total });
     }
 
     if (total === 0 && sum !== 0) {
-      setCashAmount(0);
-      setTransferAmount(0);
-      setQrAmount(0);
-      setExpensasAmount(0);
-      setCuentaCorrienteAmount(0);
+      setAmounts(EMPTY_PAYMENTS);
     }
   }, [total]);
 
@@ -169,200 +162,25 @@ export default function Ventas({ shift }: VentasProps) {
     );
   };
 
-  const parseAmount = (value: string) => {
-    if (!value) return 0;
-    const n = parseFloat(value.replace(',', '.'));
-    return isNaN(n) ? 0 : n;
-  };
-
   const handleCompleteSale = async () => {
     if (!cart.length || !shift) {
       return alert('Carrito vacío o sin turno activo');
     }
 
-    let payments = [
-      { method: 'efectivo', amount: cashAmount },
-      { method: 'transferencia', amount: transferAmount },
-      { method: 'qr', amount: qrAmount },
-      { method: 'expensas', amount: expensasAmount },
-      { method: 'cuenta_corriente', amount: cuentaCorrienteAmount },
-    ].filter((p) => p.amount > 0.009);
-
-    if (payments.length === 0) {
-      payments = [{ method: 'efectivo', amount: total }];
-      setCashAmount(total);
+    const prepared = preparePayments(amounts, total, customerName, customerLot);
+    if ('error' in prepared) {
+      return alert(prepared.error);
     }
 
-    const paymentsTotal = payments.reduce((sum, p) => sum + p.amount, 0);
-
-    if (Math.abs(paymentsTotal - total) > 0.01) {
-      return alert(
-        `La suma de los montos de pago (${paymentsTotal.toFixed(
-          2
-        )}) no coincide con el total (${total.toFixed(2)}).`
-      );
-    }
-
-    const hasCuentaCorriente = payments.some((p) => p.method === 'cuenta_corriente');
-    if (hasCuentaCorriente && (!customerName.trim() || !customerLot.trim())) {
-      return alert(
-        'Para ventas en cuenta corriente es obligatorio ingresar el nombre y el número de lote del cliente.'
-      );
-    }
-    if (hasCuentaCorriente && /^0+$/.test(customerLot.trim())) {
-      return alert(LOTE_INCORRECTO_MSG);
-    }
-    const hasNonCash = payments.some((p) => p.method !== 'efectivo');
-    if (hasNonCash && (!customerName.trim() || !customerLot.trim())) {
-      return alert(
-        'Para pagos que no son en efectivo debés completar el nombre y el lote del cliente.'
-      );
-    }
-
-    let storedPaymentMethod = payments[0].method;
-    if (payments.some((p) => p.method === 'efectivo')) {
-      storedPaymentMethod = 'efectivo';
-    }
-    if (hasCuentaCorriente && payments.length === 1) {
-      storedPaymentMethod = 'cuenta_corriente';
-    }
-
-    const saleNumber = `V-${Date.now()}`;
-    const saleData = {
-      sale_number: saleNumber,
-      user_id: shift.user_id,
-      user_name: shift.user_name,
-      shift_id: shift.id,
+    const result = await processSale({
+      shift,
       items: cart,
-      subtotal: total,
-      discount: 0,
-      total,
-      payment_method: storedPaymentMethod,
-      customer_name: customerName.trim() || null,
-      customer_lot: customerLot.trim() || null,
-      payments: payments,
-    };
-
-    const { data: saleResult, error: saleError } = await supabase
-      .from('sales')
-      .insert([saleData])
-      .select()
-      .single();
-
-    if (saleError) {
-      console.error('Error insertando venta:', saleError);
-      alert(`Error al registrar la venta: ${saleError.message}`);
-      return;
-    }
-
-    for (const item of cart) {
-      const prod = products.find((p) => p.id === item.product_id);
-      if (prod) {
-        const { error: stockError } = await supabase
-          .from('products')
-          .update({ stock: prod.stock - item.quantity })
-          .eq('id', item.product_id);
-
-        if (stockError) {
-          console.error('Error actualizando stock:', stockError);
-        }
-      }
-    }
-
-    const cashRows = payments
-      .filter((p) => p.method !== 'cuenta_corriente')
-      .map((p) => ({
-        shift_id: shift.id,
-        type: 'income',
-        category: 'venta',
-        amount: p.amount,
-        payment_method: p.method,
-        description: `Venta ${saleNumber}${
-          customerName.trim() || customerLot.trim()
-            ? ` - ${customerName.trim()} (Lote ${customerLot.trim() || '-'})`
-            : ''
-        }`,
-      }));
-
-    if (hasCuentaCorriente) {
-      const ccAmount = payments.find((p) => p.method === 'cuenta_corriente')!.amount;
-      cashRows.push({
-        shift_id: shift.id,
-        type: 'income',
-        category: 'venta',
-        amount: ccAmount,
-        payment_method: 'cuenta_corriente',
-        description: `Venta ${saleNumber} - ${customerName.trim()} (Lote ${customerLot.trim() || '-'}) [Cuenta Corriente]`,
-      });
-
-      const { data: existingAccount } = await supabase
-        .from('customer_accounts')
-        .select('*')
-        .eq('customer_name', customerName.trim())
-        .eq('customer_lot', customerLot.trim())
-        .maybeSingle();
-
-      let accountId: string;
-      let currentDebt = 0;
-
-      if (existingAccount) {
-        accountId = existingAccount.id;
-        currentDebt = Number(existingAccount.total_debt);
-      } else {
-        const { data: newAccount, error: accountError } = await supabase
-          .from('customer_accounts')
-          .insert([{
-            customer_name: customerName.trim(),
-            customer_lot: customerLot.trim(),
-            total_debt: 0,
-          }])
-          .select()
-          .single();
-
-        if (accountError || !newAccount) {
-          console.error('Error creando cuenta corriente:', accountError);
-          alert('Error al registrar la cuenta corriente.');
-          return;
-        }
-        accountId = newAccount.id;
-      }
-
-      const newBalance = currentDebt + ccAmount;
-
-      await supabase
-        .from('customer_accounts')
-        .update({ total_debt: newBalance, updated_at: new Date().toISOString() })
-        .eq('id', accountId);
-
-      await supabase
-        .from('current_account_transactions')
-        .insert([{
-          customer_account_id: accountId,
-          customer_name: customerName.trim(),
-          customer_lot: customerLot.trim(),
-          type: 'cargo',
-          amount: ccAmount,
-          balance_after: newBalance,
-          sale_id: saleResult?.id || null,
-          sale_number: saleNumber,
-          description: `Venta ${saleNumber}`,
-          user_name: shift.user_name,
-          shift_id: shift.id,
-        }]);
-    }
-
-    if (cashRows.length > 0) {
-      const { error: cashError } = await supabase
-        .from('cash_transactions')
-        .insert(cashRows);
-
-      if (cashError) {
-        console.error('Error insertando caja:', cashError);
-        alert(
-          'La venta se registró, pero hubo un error al registrar el movimiento en caja.'
-        );
-        return;
-      }
+      payments: prepared.payments,
+      customerName,
+      customerLot,
+    });
+    if (!result.ok) {
+      return alert(result.error);
     }
 
     alert('Venta completada');
@@ -371,16 +189,12 @@ export default function Ventas({ shift }: VentasProps) {
     setCart([]);
     setCustomerName('');
     setCustomerLot('');
-    setCashAmount(0);
-    setTransferAmount(0);
-    setQrAmount(0);
-    setExpensasAmount(0);
-    setCuentaCorrienteAmount(0);
+    setAmounts(EMPTY_PAYMENTS);
     loadProducts();
     checkOldDebts();
   };
 
-  const invalidCcLot = cuentaCorrienteAmount > 0 && /^0+$/.test(customerLot.trim());
+  const invalidCcLot = cuentaCorrienteAmount > 0 && isInvalidCcLot(customerLot);
 
   const baseCategories = ['Bebida', 'Comida', 'Artículos de Deporte'];
   const categories = Array.from(
@@ -638,89 +452,10 @@ export default function Ventas({ shift }: VentasProps) {
             </div>
 
             <div className="border-t-2 border-emerald-200 pt-4 space-y-3">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between bg-white border-2 border-slate-200 rounded-xl px-3 py-2.5 hover:border-emerald-300 transition-all">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Efectivo
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={cashAmount || ''}
-                    onChange={(e) => setCashAmount(parseAmount(e.target.value))}
-                    className="w-28 px-2 py-1 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-emerald-500"
-                    placeholder="0"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between bg-white border-2 border-slate-200 rounded-xl px-3 py-2.5 hover:border-emerald-300 transition-all">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Transferencia
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={transferAmount || ''}
-                    onChange={(e) =>
-                      setTransferAmount(parseAmount(e.target.value))
-                    }
-                    className="w-28 px-2 py-1 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-emerald-500"
-                    placeholder="0"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between bg-white border-2 border-slate-200 rounded-xl px-3 py-2.5 hover:border-emerald-300 transition-all">
-                  <span className="text-sm font-semibold text-slate-700">QR</span>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={qrAmount || ''}
-                    onChange={(e) => setQrAmount(parseAmount(e.target.value))}
-                    className="w-28 px-2 py-1 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-emerald-500"
-                    placeholder="0"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between bg-white border-2 border-slate-200 rounded-xl px-3 py-2.5 hover:border-emerald-300 transition-all">
-                  <span className="text-sm font-semibold text-slate-700">
-                    Expensas
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={expensasAmount || ''}
-                    onChange={(e) =>
-                      setExpensasAmount(parseAmount(e.target.value))
-                    }
-                    className="w-28 px-2 py-1 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-emerald-500"
-                    placeholder="0"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between bg-amber-50 border-2 border-amber-200 rounded-xl px-3 py-2.5 hover:border-amber-400 transition-all">
-                  <div className="flex items-center gap-2">
-                    <BookOpen size={16} className="text-amber-600" />
-                    <span className="text-sm font-semibold text-amber-700">
-                      Cta. Corriente
-                    </span>
-                  </div>
-                  <input
-                    type="number"
-                    min={0}
-                    step="0.01"
-                    value={cuentaCorrienteAmount || ''}
-                    onChange={(e) =>
-                      setCuentaCorrienteAmount(parseAmount(e.target.value))
-                    }
-                    className="w-28 px-2 py-1 bg-white border-2 border-amber-200 rounded-lg text-sm text-right focus:ring-2 focus:ring-amber-500"
-                    placeholder="0"
-                  />
-                </div>
-              </div>
+              <PaymentFields
+                amounts={amounts}
+                onChange={(method, amount) => setAmounts((prev) => ({ ...prev, [method]: amount }))}
+              />
 
               <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl p-4 flex justify-between items-center border-2 border-emerald-300">
                 <span className="text-xl font-bold text-slate-800">Total:</span>
