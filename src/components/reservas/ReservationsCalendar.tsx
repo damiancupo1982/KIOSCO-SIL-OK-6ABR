@@ -40,7 +40,7 @@ const CREATE_BUTTONS: { type: EventType; label: string; icon: typeof Trophy }[] 
   { type: 'mantenimiento', label: 'Mantenimiento', icon: Wrench },
 ];
 
-const playerLabel = (lot: string, name: string) => `${lot ? `Lote ${lot} - ` : ''}${name}`;
+const playerLabel = (lot: string, name: string) => `${name}${lot ? ` · Lote ${lot}` : ''}`;
 
 const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): AgendaBlock[] => {
   const blocks: AgendaBlock[] = [];

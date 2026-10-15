@@ -122,10 +122,21 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
                       style={{ top: top(b.startMin) + 1, height: blockHeight - 2 }}
                     >
                       <p className="font-bold flex items-center gap-1 truncate">
-                        {hhmmOf(b.startMin)} - {hhmmOf(b.endMin)}
-                        <span className="font-black tracking-wide">{meta.label}</span>
-                        {readOnly && <Lock size={10} className="shrink-0 opacity-60" />}
-                        {compact && <span className="font-semibold truncate">{b.headline}</span>}
+                        {compact ? (
+                          <>
+                            {readOnly && <Lock size={10} className="shrink-0 opacity-60" />}
+                            <span className="font-black truncate">{b.headline}</span>
+                            <span className="font-semibold opacity-70 shrink-0">
+                              {hhmmOf(b.startMin)}-{hhmmOf(b.endMin)}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            {hhmmOf(b.startMin)} - {hhmmOf(b.endMin)}
+                            <span className="font-black tracking-wide">{meta.label}</span>
+                            {readOnly && <Lock size={10} className="shrink-0 opacity-60" />}
+                          </>
+                        )}
                       </p>
                       {!compact && <p className="truncate font-semibold">{b.headline}</p>}
                       {blockHeight > 50 && b.detail && <p className="truncate opacity-80">{b.detail}</p>}
