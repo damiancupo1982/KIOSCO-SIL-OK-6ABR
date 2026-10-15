@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Clock, Loader2, Lock, Minus, Plus, Search, Trash2, UserX } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Clock, Loader2, Lock, Minus, Plus, Search, Trash2, UserPlus, Users, UserX } from 'lucide-react';
 import { supabase, CourtSession, CourtSessionItem, Product, SaleItem, Shift } from '../../lib/supabase';
 import CloseTurnoModal from './CloseTurnoModal';
+import GuestChargeRow from './GuestChargeRow';
+import OpenCourtModal from './OpenCourtModal';
 import { courtLabel, formatClock, formatDuration, money, rpcErrorMessage } from './reservasUtils';
 
 interface TurnoViewProps {
@@ -19,6 +21,7 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [showCheckout, setShowCheckout] = useState(false);
+  const [showPlayers, setShowPlayers] = useState(false);
   const [, setTick] = useState(0);
 
   const loadItems = useCallback(async () => {
@@ -54,6 +57,8 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
 
   const isOpen = session?.status === 'abierta';
   const total = items.reduce((s, i) => s + Number(i.price) * i.quantity, 0);
+  const guestItem = items.find((i) => i.kind === 'invitado');
+  const productItems = items.filter((i) => i.kind !== 'invitado');
 
   const qtyInTurno = (productId: string) =>
     items.filter((i) => i.product_id === productId).reduce((s, i) => s + i.quantity, 0);
@@ -67,10 +72,10 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
     const map = new Map<string, SaleItem>();
     for (const i of items) {
       const price = Number(i.price);
-      const key = `${i.product_id}|${price}`;
+      const key = `${i.kind}|${i.product_id}|${price}`;
       const prev = map.get(key);
       map.set(key, {
-        product_id: i.product_id,
+        product_id: i.product_id ?? '',
         product_name: i.product_name,
         price,
         quantity: (prev?.quantity ?? 0) + i.quantity,
@@ -110,7 +115,7 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
     withBusy(async () => {
       if (qty > item.quantity) {
         const product = products.find((p) => p.id === item.product_id);
-        if (product && qtyInTurno(item.product_id) + 1 > product.stock) {
+        if (product && qtyInTurno(product.id) + 1 > product.stock) {
           alert('Stock insuficiente');
           return;
         }
@@ -123,12 +128,27 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
       await loadItems();
     });
 
+  const setGuestCharge = (quantity: number, price: number) =>
+    withBusy(async () => {
+      const { error } = await supabase.rpc('set_court_guest_charge', {
+        p_session_id: sessionId,
+        p_quantity: Math.max(0, quantity),
+        p_price: price,
+      });
+      if (error) alert(rpcErrorMessage(error.message));
+      await Promise.all([loadItems(), loadSession()]);
+    });
+
   const handleCloseTurno = () =>
     withBusy(async () => {
       if (!session) return;
       await loadItems();
-      const { data: latest } = await supabase.from('court_session_items').select('id').eq('session_id', sessionId);
-      if ((latest || []).length > 0) {
+      const { data: latest } = await supabase
+        .from('court_session_items')
+        .select('price, quantity')
+        .eq('session_id', sessionId);
+      const latestTotal = (latest || []).reduce((s, i) => s + Number(i.price) * i.quantity, 0);
+      if (latestTotal > 0) {
         if (!shift) {
           alert('No hay un turno de caja abierto. Abra la caja para poder cobrar.');
           return;
@@ -212,7 +232,17 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-            <h4 className="text-sm font-bold text-slate-700 mb-3">Jugadores</h4>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-bold text-slate-700">Jugadores</h4>
+              {isOpen && (
+                <button
+                  onClick={() => setShowPlayers(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-sky-700 hover:bg-sky-50 border border-sky-200"
+                >
+                  <Users size={14} /> Editar jugadores
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {session.players.map((p, i) => (
                 <div
@@ -280,7 +310,16 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
           <h4 className="text-lg font-bold text-slate-800">Consumos</h4>
           <div className="space-y-2 max-h-[340px] overflow-y-auto">
             {items.length === 0 && <p className="text-sm text-slate-400 text-center py-6">Sin consumos</p>}
-            {items.map((item) => (
+            {guestItem && (
+              <GuestChargeRow
+                item={guestItem}
+                manual={session.guest_charge_manual}
+                editable={isOpen}
+                busy={busy}
+                onSet={setGuestCharge}
+              />
+            )}
+            {productItems.map((item) => (
               <div key={item.id} className="rounded-xl border border-slate-200 p-3">
                 <div className="flex justify-between gap-2 text-sm">
                   <span className="font-semibold text-slate-800">
@@ -319,6 +358,15 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
               </div>
             ))}
           </div>
+          {isOpen && !guestItem && (
+            <button
+              onClick={() => setGuestCharge(1, 12000)}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border-2 border-dashed border-red-200 text-red-700 hover:bg-red-50 text-sm font-semibold"
+            >
+              <UserPlus size={16} /> Agregar cargo INVITADO
+            </button>
+          )}
           <div className="flex justify-between items-center border-t-2 border-emerald-200 pt-4">
             <span className="text-xl font-bold text-slate-800">TOTAL</span>
             <span className="text-3xl font-bold text-emerald-600">{money(total)}</span>
@@ -336,6 +384,19 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
           )}
         </div>
       </div>
+
+      {showPlayers && (
+        <OpenCourtModal
+          court={session.court}
+          session={session}
+          userName={shift?.user_name ?? ''}
+          onClose={() => setShowPlayers(false)}
+          onDone={async () => {
+            setShowPlayers(false);
+            await Promise.all([loadSession(), loadItems()]);
+          }}
+        />
+      )}
 
       {showCheckout && shift && (
         <CloseTurnoModal

@@ -69,6 +69,7 @@ export const RPC_ERRORS: Record<string, string> = {
   invalid_players: 'Debe cargar entre 1 y 4 jugadores.',
   session_not_open: 'Este turno ya fue cerrado.',
   session_has_items: 'El turno tiene consumos: debe cobrarse.',
+  invalid_guest_charge: 'Cantidad o precio de invitado inválido.',
 };
 
 export const rpcErrorMessage = (message: string | undefined) => {

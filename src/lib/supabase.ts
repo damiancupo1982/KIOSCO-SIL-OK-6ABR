@@ -156,12 +156,14 @@ export interface CourtSession {
   sale_id: string | null;
   opened_by: string;
   closed_by: string;
+  guest_charge_manual: boolean;
 }
 
 export interface CourtSessionItem {
   id: string;
   session_id: string;
-  product_id: string;
+  product_id: string | null;
+  kind: 'producto' | 'invitado';
   product_name: string;
   price: number;
   quantity: number;

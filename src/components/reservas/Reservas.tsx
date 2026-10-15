@@ -199,7 +199,7 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
           reservation={openDraft.reservation}
           userName={userName}
           onClose={() => setOpenDraft(null)}
-          onOpened={(sessionId) => {
+          onDone={(sessionId) => {
             setOpenDraft(null);
             refresh();
             setTurnoId(sessionId);

@@ -123,7 +123,7 @@ export async function processSale({
     return { ok: false, error: `Error al registrar la venta: ${msg}` };
   }
 
-  const productIds = Array.from(new Set(items.map((i) => i.product_id)));
+  const productIds = Array.from(new Set(items.map((i) => i.product_id).filter(Boolean)));
   const { data: stockRows } = await supabase.from('products').select('id, stock').in('id', productIds);
   for (const item of items) {
     const prod = (stockRows || []).find((p) => p.id === item.product_id);

@@ -105,7 +105,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
     salesToday?.forEach((sale) => {
       if (Array.isArray(sale.items)) {
         sale.items.forEach((item: any) => {
-          const productName = productMap.get(item.product_id)?.toLowerCase() || '';
+          const productName = (productMap.get(item.product_id) || item.product_name || '').toLowerCase();
           const quantity = item.quantity || 0;
 
           if (productName.includes('luz') || productName.includes('luces')) {
@@ -125,7 +125,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
       if (Array.isArray(sale.items)) {
         sale.items.forEach((item: any) => {
           const productId = item.product_id;
-          const productName = productMap.get(productId) || '';
+          const productName = productMap.get(productId) || item.product_name || '';
           const productNameLower = productName.toLowerCase();
           const quantity = item.quantity || 0;
 
