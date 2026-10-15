@@ -1,0 +1,3985 @@
+=====================================================================
+PROMPT: INSTALAR EL MODULO "RESERVAS" (CANCHAS, AGENDA, TURNOS) EXACTAMENTE IGUAL
+=====================================================================
+
+Necesito que agregues a este sistema el modulo RESERVAS completo, identico al de mi otro sistema.
+Abajo te paso TODO: la base de datos (SQL exacto), los tipos, los archivos de codigo completos
+y como integrarlo al menu. Copia el codigo TEXTUALMENTE, sin "mejorarlo", sin cambiar nombres,
+textos, colores ni logica. Si algo de este sistema no coincide con los requisitos del PASO 0,
+avisame antes de inventar una alternativa.
+
+---------------------------------------------------------------------
+REGLAS GENERALES
+---------------------------------------------------------------------
+1. NO modificar Ventas, Caja, Socios, Stock ni Cuenta Corriente (solo lo indicado en el PASO 5).
+2. Base de datos: aplicar las migraciones del PASO 1 EN ORDEN, cada una como una migracion
+   separada con la herramienta de migraciones de Supabase (apply_migration). No usar la CLI.
+   No borrar ni modificar datos existentes.
+3. La app usa la clave publica (anon) con login propio contra la tabla "users" (NO Supabase Auth).
+   Por eso las politicas son "TO anon, authenticated" y las funciones RPC tienen EXECUTE para anon.
+4. Zona horaria: America/Argentina/Buenos_Aires (UTC-3). Formatos es-AR.
+5. Stack: React 18 + TypeScript + Tailwind + lucide-react + @supabase/supabase-js.
+   No instalar ninguna dependencia nueva.
+6. Al terminar, compilar el proyecto (build) y corregir cualquier error de estos archivos.
+
+---------------------------------------------------------------------
+PASO 0 - REQUISITOS QUE YA DEBEN EXISTIR (verificalos antes de empezar)
+---------------------------------------------------------------------
+Tablas y columnas que el modulo usa:
+- products: id (uuid), name, price (numeric), stock (int), active (bool), created_at
+  * Debe existir un producto llamado "Invitado / Prop sin carnet": de ahi se toma el precio
+    sugerido del cargo INVITADO (si no existe se usa 12000). NO se descuenta su stock y no se
+    muestra en la lista de productos dentro del turno.
+- sales: id, sale_number, user_id, user_name, shift_id, items (jsonb), subtotal, discount, total,
+  payment_method, customer_name, customer_lot, payments (jsonb: [{method, amount}]), created_at
+  * La migracion 1 agrega la columna sales.court_session_id.
+- shifts (turno de caja abierto: id, user_id, user_name, ...), cash_transactions,
+  customer_accounts (customer_name, customer_lot, total_debt, updated_at),
+  current_account_transactions.
+- socios: id, first_name, last_name, category, carnet_status ('activo' = SOCIO), lot_number (TEXT).
+- src/lib/supabase.ts exporta: supabase, Shift, Product, SaleItem.
+Si falta alguna columna (por ejemplo sales.payments), avisame y agregala con una migracion
+NO destructiva antes de seguir.
+
+---------------------------------------------------------------------
+RESUMEN FUNCIONAL (lo que debe quedar funcionando)
+---------------------------------------------------------------------
+- Menu "Reservas" (icono CalendarDays, celeste) despues de Ventas, con pestanas Canchas / Agenda / Historial.
+- 4 canchas (0, 1, 2, 3). Tarjeta por cancha: LIBRE (verde), RESERVADA / CLASE / TORNEO /
+  MANTENIMIENTO (evento en curso o que empieza en menos de 60 min) o EN JUEGO (ambar),
+  con consumo, hora de apertura y tiempo transcurrido. Si esta libre muestra "Proximo: ...".
+- Agenda: eventos RESERVA (titular + lote, obligatorio), CLASE (profesor y alumno/grupo opcionales),
+  TORNEO (nombre obligatorio, una o varias canchas) y MANTENIMIENTO (motivo, una o varias canchas).
+  Todos con fecha, desde, hasta y observaciones. Botones: "Registrar reserva", "Registrar clase",
+  "Registrar torneo", "Mantenimiento".
+- Vista Dia: canchas en columnas y horas en filas, bloques del tamano de su duracion real,
+  color distinto por tipo, linea roja con la hora actual. Vistas Semana y Por cancha.
+  Click en espacio vacio = nueva reserva en ese horario.
+- Sin superposiciones: la base valida contra reservas, clases, torneos, mantenimientos, canchas
+  en juego y turnos jugados. Mensaje: "Esta cancha ya se encuentra ocupada entre las HH:MM y las HH:MM."
+- Eventos futuros: editar fecha/horario/cancha(s) o cancelar (se revalida). Turnos jugados: solo lectura.
+- Turno jugado en la agenda: "TURNO JUGADO" gris con candado y el nombre del responsable de la
+  reserva (en bloques cortos el nombre va primero); al tocarlo abre el detalle completo
+  (responsable, horarios, jugadores, consumos, pagos con montos, cuenta corriente, venta,
+  quien abrio y quien cerro).
+- Abrir cancha: hasta 4 jugadores buscados por lote (socios del lote; SOCIO verde si carnet activo,
+  INVITADO rojo si no). El jugador 1 es el titular. No se puede abrir una cancha ya abierta ni una
+  ocupada en ese momento por otro evento.
+- Turno: consumos de productos (valida stock y precio), cargo automatico INVITADO por cada jugador
+  no socio (precio del producto "Invitado / Prop sin carnet"), editable (cantidad, precio, eliminar);
+  si se edita a mano deja de recalcularse. CERRAR TURNO cobra con el mismo checkout de Ventas
+  (efectivo, transferencia, QR, expensas, cuenta corriente, pagos combinados), descuenta stock,
+  registra caja y CC (confirma a quien se carga la deuda). Si el total es $0 se cierra sin cobro.
+  Un turno no puede cobrarse dos veces.
+- Historial: rango de fechas con turnos, eventos y cancelaciones, expandible con detalle.
+
+---------------------------------------------------------------------
+PASO 1 - BASE DE DATOS (aplicar estas 5 migraciones EN ESTE ORDEN, textuales)
+---------------------------------------------------------------------
+
+######## MIGRACION 1/5 - nombre: create_reservas_module ########
+/*
+# Módulo de Reservas de canchas
+
+1. Nuevas tablas
+- `court_reservations`: reservas futuras (cancha 0-3, fecha, hora, titular lote/nombre, observación,
+  estado reservada|abierta|cerrada|cancelada, session_id del turno que se abrió desde la reserva).
+- `court_sessions`: turnos de cancha (número de turno correlativo, cancha, reserva de origen, estado
+  abierta|cerrada|cancelada, apertura/cierre, jugadores en JSON con lote/nombre/condición, titular,
+  total, medio de pago, venta generada, usuarios que abrieron/cerraron).
+- `court_session_items`: consumos del turno (producto, nombre, precio, cantidad).
+
+2. Cambios en tablas existentes
+- `sales.court_session_id` (uuid, opcional): indica de qué turno de cancha se originó la venta.
+  Índice único: un turno solo puede generar UNA venta.
+
+3. Lógica en el servidor
+- `open_court_session(...)`: abre un turno de forma atómica (no permite dos turnos abiertos en la misma cancha)
+  y marca la reserva de origen como abierta.
+- `close_court_session_free(id, user)`: cierra un turno sin consumos (total $0).
+- Trigger en `sales`: al registrar una venta con court_session_id, cierra el turno en la misma operación;
+  si el turno ya no está abierto la venta se rechaza (evita doble cobro / doble cierre).
+
+4. Seguridad
+- RLS en las 3 tablas; la app no usa login de Supabase, por eso las políticas son para anon y authenticated.
+- Los turnos no se pueden modificar directamente: solo por las funciones/trigger anteriores.
+- Los consumos solo se pueden agregar/quitar mientras el turno esté abierto.
+- Reservas: lectura, alta y modificación (cancelar = cambiar estado). Sin borrado.
+*/
+
+CREATE TABLE IF NOT EXISTS court_reservations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  court smallint NOT NULL CHECK (court BETWEEN 0 AND 3),
+  reservation_date date NOT NULL,
+  start_time time NOT NULL,
+  titular_lot text NOT NULL DEFAULT '',
+  titular_name text NOT NULL,
+  notes text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'reservada' CHECK (status IN ('reservada','abierta','cerrada','cancelada')),
+  session_id uuid,
+  created_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_court_reservation_slot
+  ON court_reservations(court, reservation_date, start_time) WHERE status <> 'cancelada';
+CREATE INDEX IF NOT EXISTS idx_court_reservations_date ON court_reservations(reservation_date);
+
+CREATE TABLE IF NOT EXISTS court_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_number bigint GENERATED ALWAYS AS IDENTITY,
+  court smallint NOT NULL CHECK (court BETWEEN 0 AND 3),
+  reservation_id uuid REFERENCES court_reservations(id),
+  status text NOT NULL DEFAULT 'abierta' CHECK (status IN ('abierta','cerrada','cancelada')),
+  opened_at timestamptz NOT NULL DEFAULT now(),
+  closed_at timestamptz,
+  players jsonb NOT NULL DEFAULT '[]'::jsonb,
+  titular_name text NOT NULL,
+  titular_lot text NOT NULL DEFAULT '',
+  titular_socio_id uuid,
+  total numeric(12,2) NOT NULL DEFAULT 0,
+  payment_method text,
+  sale_id uuid,
+  opened_by text NOT NULL DEFAULT '',
+  closed_by text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_court_open_session ON court_sessions(court) WHERE status = 'abierta';
+CREATE INDEX IF NOT EXISTS idx_court_sessions_opened ON court_sessions(opened_at);
+
+CREATE TABLE IF NOT EXISTS court_session_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id uuid NOT NULL REFERENCES court_sessions(id),
+  product_id uuid NOT NULL,
+  product_name text NOT NULL,
+  price numeric(12,2) NOT NULL CHECK (price >= 0),
+  quantity integer NOT NULL CHECK (quantity > 0),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_court_session_items_session ON court_session_items(session_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='sales' AND column_name='court_session_id') THEN
+    ALTER TABLE sales ADD COLUMN court_session_id uuid REFERENCES court_sessions(id);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_court_session ON sales(court_session_id) WHERE court_session_id IS NOT NULL;
+
+ALTER TABLE court_reservations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE court_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE court_session_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "read_court_reservations" ON court_reservations;
+CREATE POLICY "read_court_reservations" ON court_reservations FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "insert_court_reservations" ON court_reservations;
+CREATE POLICY "insert_court_reservations" ON court_reservations FOR INSERT TO anon, authenticated
+  WITH CHECK (status = 'reservada' AND session_id IS NULL);
+DROP POLICY IF EXISTS "update_court_reservations" ON court_reservations;
+CREATE POLICY "update_court_reservations" ON court_reservations FOR UPDATE TO anon, authenticated
+  USING (status = 'reservada')
+  WITH CHECK (status IN ('reservada','cancelada') AND session_id IS NULL);
+
+DROP POLICY IF EXISTS "read_court_sessions" ON court_sessions;
+CREATE POLICY "read_court_sessions" ON court_sessions FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "read_court_session_items" ON court_session_items;
+CREATE POLICY "read_court_session_items" ON court_session_items FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "insert_court_session_items" ON court_session_items;
+CREATE POLICY "insert_court_session_items" ON court_session_items FOR INSERT TO anon, authenticated
+  WITH CHECK (EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'));
+DROP POLICY IF EXISTS "update_court_session_items" ON court_session_items;
+CREATE POLICY "update_court_session_items" ON court_session_items FOR UPDATE TO anon, authenticated
+  USING (EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'))
+  WITH CHECK (EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'));
+DROP POLICY IF EXISTS "delete_court_session_items" ON court_session_items;
+CREATE POLICY "delete_court_session_items" ON court_session_items FOR DELETE TO anon, authenticated
+  USING (EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'));
+
+CREATE OR REPLACE FUNCTION public.open_court_session(
+  p_court smallint, p_reservation_id uuid, p_players jsonb,
+  p_titular_name text, p_titular_lot text, p_titular_socio_id uuid, p_user text
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  IF btrim(coalesce(p_titular_name,'')) = '' THEN
+    RAISE EXCEPTION 'titular_required';
+  END IF;
+  IF jsonb_typeof(p_players) <> 'array' OR jsonb_array_length(p_players) NOT BETWEEN 1 AND 4 THEN
+    RAISE EXCEPTION 'invalid_players';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.court_sessions WHERE court = p_court AND status = 'abierta') THEN
+    RAISE EXCEPTION 'court_already_open';
+  END IF;
+
+  IF p_reservation_id IS NOT NULL THEN
+    PERFORM 1 FROM public.court_reservations WHERE id = p_reservation_id AND status = 'reservada' FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'reservation_not_available';
+    END IF;
+  END IF;
+
+  INSERT INTO public.court_sessions(court, reservation_id, players, titular_name, titular_lot, titular_socio_id, opened_by)
+  VALUES (p_court, p_reservation_id, p_players, btrim(p_titular_name), btrim(coalesce(p_titular_lot,'')), p_titular_socio_id, coalesce(p_user,''))
+  RETURNING id INTO v_id;
+
+  IF p_reservation_id IS NOT NULL THEN
+    UPDATE public.court_reservations
+    SET status = 'abierta', session_id = v_id, court = p_court, updated_at = now()
+    WHERE id = p_reservation_id;
+  END IF;
+
+  RETURN v_id;
+EXCEPTION WHEN unique_violation THEN
+  RAISE EXCEPTION 'court_already_open';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.close_court_session_free(p_session_id uuid, p_user text)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_res uuid;
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.court_session_items WHERE session_id = p_session_id) THEN
+    RAISE EXCEPTION 'session_has_items';
+  END IF;
+
+  UPDATE public.court_sessions
+  SET status = 'cerrada', closed_at = now(), total = 0, closed_by = coalesce(p_user,'')
+  WHERE id = p_session_id AND status = 'abierta'
+  RETURNING reservation_id INTO v_res;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'session_not_open';
+  END IF;
+
+  IF v_res IS NOT NULL THEN
+    UPDATE public.court_reservations SET status = 'cerrada', updated_at = now() WHERE id = v_res;
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.close_court_session_on_sale()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_res uuid;
+BEGIN
+  IF NEW.court_session_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  UPDATE public.court_sessions
+  SET status = 'cerrada', closed_at = now(), total = NEW.total,
+      payment_method = NEW.payment_method, sale_id = NEW.id, closed_by = coalesce(NEW.user_name,'')
+  WHERE id = NEW.court_session_id AND status = 'abierta'
+  RETURNING reservation_id INTO v_res;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'court_session_not_open';
+  END IF;
+
+  IF v_res IS NOT NULL THEN
+    UPDATE public.court_reservations SET status = 'cerrada', updated_at = now() WHERE id = v_res;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_close_court_session_on_sale ON sales;
+CREATE TRIGGER trg_close_court_session_on_sale
+  BEFORE INSERT ON sales FOR EACH ROW EXECUTE FUNCTION public.close_court_session_on_sale();
+
+REVOKE ALL ON FUNCTION public.open_court_session(smallint, uuid, jsonb, text, text, uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.open_court_session(smallint, uuid, jsonb, text, text, uuid, text) TO anon, authenticated;
+REVOKE ALL ON FUNCTION public.close_court_session_free(uuid, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.close_court_session_free(uuid, text) TO anon, authenticated;
+REVOKE ALL ON FUNCTION public.close_court_session_on_sale() FROM PUBLIC;
+######## FIN MIGRACION 1/5 ########
+
+######## MIGRACION 2/5 - nombre: revoke_court_trigger_function_execute ########
+/*
+# Restrict internal trigger function
+
+1. Security
+- `close_court_session_on_sale()` is only used internally by the trigger on `sales`.
+  Revoke direct EXECUTE from anon and authenticated (the trigger keeps working).
+*/
+REVOKE EXECUTE ON FUNCTION public.close_court_session_on_sale() FROM anon, authenticated;
+######## FIN MIGRACION 2/5 ########
+
+######## MIGRACION 3/5 - nombre: court_guest_charge ########
+/*
+# Cargo automático de INVITADOS en turnos de cancha
+
+1. Cambios en tablas
+- `court_session_items`:
+  - `kind` (text, 'producto' | 'invitado', default 'producto'): tipo de ítem del turno.
+  - `product_id` pasa a ser opcional (el ítem INVITADO no es un producto de stock).
+  - Regla: los ítems 'producto' siempre tienen product_id.
+  - Índice único: un solo ítem INVITADO por turno.
+- `court_sessions`:
+  - `guest_charge_manual` (boolean, default false): se vuelve true cuando el operador modifica o elimina
+    el cargo INVITADO a mano. Desde ese momento el sistema ya no lo recalcula.
+
+2. Lógica en el servidor
+- `sync_court_guest_charge(session)` (interna): si el cargo sigue en modo automático, deja el ítem INVITADO
+  con cantidad = jugadores invitados (precio predeterminado $12.000, o el precio actual si ya existe);
+  si no hay invitados, quita el ítem.
+- `open_court_session(...)`: igual que antes, y además genera el cargo INVITADO al abrir.
+- `update_court_session_players(...)`: permite corregir jugadores de un turno abierto y recalcula el cargo
+  si sigue automático.
+- `set_court_guest_charge(session, cantidad, precio)`: edición manual (cantidad 0 = eliminar). Marca el
+  cargo como manual.
+- `close_court_session_free`: ahora permite cerrar sin cobro cuando el total es $0 (aunque haya ítems en $0).
+
+3. Seguridad
+- Los ítems INVITADO solo se crean/modifican/eliminan mediante las funciones anteriores:
+  las políticas de la app para agregar/modificar/quitar consumos quedan limitadas a ítems 'producto'.
+- La función interna de sincronización no puede llamarse desde la app.
+*/
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='court_session_items' AND column_name='kind') THEN
+    ALTER TABLE court_session_items ADD COLUMN kind text NOT NULL DEFAULT 'producto'
+      CHECK (kind IN ('producto','invitado'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='court_sessions' AND column_name='guest_charge_manual') THEN
+    ALTER TABLE court_sessions ADD COLUMN guest_charge_manual boolean NOT NULL DEFAULT false;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'court_session_items_product_required') THEN
+    ALTER TABLE court_session_items ALTER COLUMN product_id DROP NOT NULL;
+    ALTER TABLE court_session_items ADD CONSTRAINT court_session_items_product_required
+      CHECK (kind = 'invitado' OR product_id IS NOT NULL);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_court_session_guest_item
+  ON court_session_items(session_id) WHERE kind = 'invitado';
+
+DROP POLICY IF EXISTS "insert_court_session_items" ON court_session_items;
+CREATE POLICY "insert_court_session_items" ON court_session_items FOR INSERT TO anon, authenticated
+  WITH CHECK (kind = 'producto' AND EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'));
+DROP POLICY IF EXISTS "update_court_session_items" ON court_session_items;
+CREATE POLICY "update_court_session_items" ON court_session_items FOR UPDATE TO anon, authenticated
+  USING (kind = 'producto' AND EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'))
+  WITH CHECK (kind = 'producto' AND EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'));
+DROP POLICY IF EXISTS "delete_court_session_items" ON court_session_items;
+CREATE POLICY "delete_court_session_items" ON court_session_items FOR DELETE TO anon, authenticated
+  USING (kind = 'producto' AND EXISTS (SELECT 1 FROM court_sessions s WHERE s.id = session_id AND s.status = 'abierta'));
+
+CREATE OR REPLACE FUNCTION public.sync_court_guest_charge(p_session_id uuid)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_manual boolean;
+  v_players jsonb;
+  v_guests integer;
+BEGIN
+  SELECT guest_charge_manual, players INTO v_manual, v_players
+  FROM public.court_sessions WHERE id = p_session_id AND status = 'abierta';
+  IF NOT FOUND OR v_manual THEN
+    RETURN;
+  END IF;
+
+  SELECT count(*) INTO v_guests
+  FROM jsonb_array_elements(v_players) p
+  WHERE coalesce((p->>'is_socio')::boolean, false) = false;
+
+  IF v_guests = 0 THEN
+    DELETE FROM public.court_session_items WHERE session_id = p_session_id AND kind = 'invitado';
+  ELSE
+    INSERT INTO public.court_session_items(session_id, product_id, product_name, price, quantity, kind)
+    VALUES (p_session_id, NULL, 'INVITADO', 12000, v_guests, 'invitado')
+    ON CONFLICT (session_id) WHERE kind = 'invitado'
+    DO UPDATE SET quantity = EXCLUDED.quantity;
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.sync_court_guest_charge(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sync_court_guest_charge(uuid) FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.open_court_session(
+  p_court smallint, p_reservation_id uuid, p_players jsonb,
+  p_titular_name text, p_titular_lot text, p_titular_socio_id uuid, p_user text
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  IF btrim(coalesce(p_titular_name,'')) = '' THEN
+    RAISE EXCEPTION 'titular_required';
+  END IF;
+  IF jsonb_typeof(p_players) <> 'array' OR jsonb_array_length(p_players) NOT BETWEEN 1 AND 4 THEN
+    RAISE EXCEPTION 'invalid_players';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.court_sessions WHERE court = p_court AND status = 'abierta') THEN
+    RAISE EXCEPTION 'court_already_open';
+  END IF;
+
+  IF p_reservation_id IS NOT NULL THEN
+    PERFORM 1 FROM public.court_reservations WHERE id = p_reservation_id AND status = 'reservada' FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'reservation_not_available';
+    END IF;
+  END IF;
+
+  INSERT INTO public.court_sessions(court, reservation_id, players, titular_name, titular_lot, titular_socio_id, opened_by)
+  VALUES (p_court, p_reservation_id, p_players, btrim(p_titular_name), btrim(coalesce(p_titular_lot,'')), p_titular_socio_id, coalesce(p_user,''))
+  RETURNING id INTO v_id;
+
+  IF p_reservation_id IS NOT NULL THEN
+    UPDATE public.court_reservations
+    SET status = 'abierta', session_id = v_id, court = p_court, updated_at = now()
+    WHERE id = p_reservation_id;
+  END IF;
+
+  PERFORM public.sync_court_guest_charge(v_id);
+
+  RETURN v_id;
+EXCEPTION WHEN unique_violation THEN
+  RAISE EXCEPTION 'court_already_open';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.update_court_session_players(
+  p_session_id uuid, p_players jsonb, p_titular_name text, p_titular_lot text, p_titular_socio_id uuid
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+BEGIN
+  IF btrim(coalesce(p_titular_name,'')) = '' THEN
+    RAISE EXCEPTION 'titular_required';
+  END IF;
+  IF jsonb_typeof(p_players) <> 'array' OR jsonb_array_length(p_players) NOT BETWEEN 1 AND 4 THEN
+    RAISE EXCEPTION 'invalid_players';
+  END IF;
+
+  UPDATE public.court_sessions
+  SET players = p_players,
+      titular_name = btrim(p_titular_name),
+      titular_lot = btrim(coalesce(p_titular_lot,'')),
+      titular_socio_id = p_titular_socio_id
+  WHERE id = p_session_id AND status = 'abierta';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'session_not_open';
+  END IF;
+
+  PERFORM public.sync_court_guest_charge(p_session_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_court_guest_charge(p_session_id uuid, p_quantity integer, p_price numeric)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+BEGIN
+  IF p_quantity IS NULL OR p_price IS NULL OR p_quantity < 0 OR p_quantity > 99 OR p_price < 0 THEN
+    RAISE EXCEPTION 'invalid_guest_charge';
+  END IF;
+
+  UPDATE public.court_sessions SET guest_charge_manual = true
+  WHERE id = p_session_id AND status = 'abierta';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'session_not_open';
+  END IF;
+
+  IF p_quantity = 0 THEN
+    DELETE FROM public.court_session_items WHERE session_id = p_session_id AND kind = 'invitado';
+  ELSE
+    INSERT INTO public.court_session_items(session_id, product_id, product_name, price, quantity, kind)
+    VALUES (p_session_id, NULL, 'INVITADO', round(p_price, 2), p_quantity, 'invitado')
+    ON CONFLICT (session_id) WHERE kind = 'invitado'
+    DO UPDATE SET quantity = EXCLUDED.quantity, price = EXCLUDED.price;
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.close_court_session_free(p_session_id uuid, p_user text)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_res uuid;
+BEGIN
+  IF (SELECT coalesce(sum(price * quantity), 0) FROM public.court_session_items WHERE session_id = p_session_id) > 0 THEN
+    RAISE EXCEPTION 'session_has_items';
+  END IF;
+
+  UPDATE public.court_sessions
+  SET status = 'cerrada', closed_at = now(), total = 0, closed_by = coalesce(p_user,'')
+  WHERE id = p_session_id AND status = 'abierta'
+  RETURNING reservation_id INTO v_res;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'session_not_open';
+  END IF;
+
+  IF v_res IS NOT NULL THEN
+    UPDATE public.court_reservations SET status = 'cerrada', updated_at = now() WHERE id = v_res;
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.update_court_session_players(uuid, jsonb, text, text, uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.update_court_session_players(uuid, jsonb, text, text, uuid) TO anon, authenticated;
+REVOKE ALL ON FUNCTION public.set_court_guest_charge(uuid, integer, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.set_court_guest_charge(uuid, integer, numeric) TO anon, authenticated;
+######## FIN MIGRACION 3/5 ########
+
+######## MIGRACION 4/5 - nombre: court_agenda_events ########
+/*
+# Agenda de canchas: hora de fin, tipos de evento y control de superposición
+
+1. Cambios en `court_reservations` (ahora representa cualquier evento de agenda)
+- `end_time` (time): hora de finalización. Las filas existentes reciben inicio + 1:30.
+- `event_type` (text): 'reserva' | 'clase' | 'torneo' | 'mantenimiento' (default 'reserva').
+- `event_group` (uuid): agrupa un mismo evento en varias canchas (torneo / mantenimiento).
+- `title` (text): nombre del torneo o motivo del mantenimiento.
+- `professor`, `student` (text): datos opcionales de las clases.
+- Regla: la hora de fin debe ser posterior a la de inicio.
+- Se elimina el índice de "misma hora de inicio" (`uq_court_reservation_slot`): lo reemplaza el control
+  de superposición, que es más completo. No se borran datos.
+
+2. Control de superposición (trigger `check_court_event_overlap`)
+- Al guardar un evento activo, verifica que en la misma cancha no exista superposición con:
+  otros eventos activos (reservada/abierta), turnos en juego (desde su apertura hasta ahora)
+  ni turnos jugados (apertura a cierre).
+- Si hay conflicto, el error informa el horario ocupado (court_busy:HH:MM-HH:MM).
+- Usa un bloqueo por cancha para evitar que dos operadores reserven el mismo horario a la vez.
+
+3. Funciones
+- `save_court_event(...)`: crea o edita un evento (una o varias canchas) de forma atómica.
+- `cancel_court_event(group)`: cancela un evento futuro (todas sus canchas).
+- `open_court_session(...)`: al abrir sin reserva, verifica que la cancha no esté ocupada en este momento
+  por otro evento (clase, torneo, mantenimiento o reserva).
+
+4. Seguridad
+- Los eventos ya no se crean ni modifican directamente desde la app: solo con las funciones anteriores,
+  que validan los datos. Se quitan las políticas directas de alta/modificación; la lectura sigue igual.
+*/
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='court_reservations' AND column_name='end_time') THEN
+    ALTER TABLE court_reservations ADD COLUMN end_time time;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='court_reservations' AND column_name='event_type') THEN
+    ALTER TABLE court_reservations ADD COLUMN event_type text NOT NULL DEFAULT 'reserva'
+      CHECK (event_type IN ('reserva','clase','torneo','mantenimiento'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='court_reservations' AND column_name='event_group') THEN
+    ALTER TABLE court_reservations ADD COLUMN event_group uuid;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='court_reservations' AND column_name='title') THEN
+    ALTER TABLE court_reservations ADD COLUMN title text NOT NULL DEFAULT '';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='court_reservations' AND column_name='professor') THEN
+    ALTER TABLE court_reservations ADD COLUMN professor text NOT NULL DEFAULT '';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='court_reservations' AND column_name='student') THEN
+    ALTER TABLE court_reservations ADD COLUMN student text NOT NULL DEFAULT '';
+  END IF;
+END $$;
+
+UPDATE court_reservations SET end_time = least(start_time + interval '90 minutes', time '23:59') WHERE end_time IS NULL;
+UPDATE court_reservations SET event_group = id WHERE event_group IS NULL;
+
+ALTER TABLE court_reservations ALTER COLUMN end_time SET NOT NULL;
+ALTER TABLE court_reservations ALTER COLUMN event_group SET NOT NULL;
+ALTER TABLE court_reservations ALTER COLUMN event_group SET DEFAULT gen_random_uuid();
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'court_reservations_time_order') THEN
+    ALTER TABLE court_reservations ADD CONSTRAINT court_reservations_time_order CHECK (end_time > start_time);
+  END IF;
+END $$;
+
+DROP INDEX IF EXISTS uq_court_reservation_slot;
+CREATE INDEX IF NOT EXISTS idx_court_reservations_group ON court_reservations(event_group);
+CREATE INDEX IF NOT EXISTS idx_court_reservations_court_date ON court_reservations(court, reservation_date);
+
+DROP POLICY IF EXISTS "insert_court_reservations" ON court_reservations;
+DROP POLICY IF EXISTS "update_court_reservations" ON court_reservations;
+
+CREATE OR REPLACE FUNCTION public.find_court_conflict(
+  p_court smallint, p_start timestamp, p_end timestamp, p_exclude_id uuid
+) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
+AS $$
+  SELECT to_char(x.s, 'HH24:MI') || '-' || to_char(x.e, 'HH24:MI')
+  FROM (
+    SELECT (r.reservation_date + r.start_time) AS s, (r.reservation_date + r.end_time) AS e
+    FROM public.court_reservations r
+    WHERE r.court = p_court AND r.status IN ('reservada','abierta')
+      AND r.id IS DISTINCT FROM p_exclude_id
+    UNION ALL
+    SELECT (cs.opened_at AT TIME ZONE 'America/Argentina/Buenos_Aires'),
+           (coalesce(cs.closed_at, greatest(now(), cs.opened_at) + interval '1 minute') AT TIME ZONE 'America/Argentina/Buenos_Aires')
+    FROM public.court_sessions cs
+    WHERE cs.court = p_court AND cs.status IN ('abierta','cerrada')
+      AND cs.reservation_id IS DISTINCT FROM p_exclude_id
+  ) x
+  WHERE x.s < p_end AND x.e > p_start
+  ORDER BY x.s
+  LIMIT 1;
+$$;
+
+REVOKE ALL ON FUNCTION public.find_court_conflict(smallint, timestamp, timestamp, uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.find_court_conflict(smallint, timestamp, timestamp, uuid) FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.check_court_event_overlap()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_conflict text;
+BEGIN
+  IF NEW.status <> 'reservada' THEN
+    RETURN NEW;
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('court_agenda'), NEW.court);
+  v_conflict := public.find_court_conflict(
+    NEW.court, NEW.reservation_date + NEW.start_time, NEW.reservation_date + NEW.end_time, NEW.id);
+  IF v_conflict IS NOT NULL THEN
+    RAISE EXCEPTION 'court_busy:%', v_conflict;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.check_court_event_overlap() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.check_court_event_overlap() FROM anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_check_court_event_overlap ON court_reservations;
+CREATE TRIGGER trg_check_court_event_overlap
+  BEFORE INSERT OR UPDATE ON court_reservations
+  FOR EACH ROW EXECUTE FUNCTION public.check_court_event_overlap();
+
+CREATE OR REPLACE FUNCTION public.save_court_event(
+  p_group_id uuid, p_event_type text, p_courts smallint[], p_date date, p_start time, p_end time,
+  p_titular_name text, p_titular_lot text, p_title text, p_professor text, p_student text,
+  p_notes text, p_user text
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_group uuid := coalesce(p_group_id, gen_random_uuid());
+  v_courts smallint[];
+  v_free_rows uuid[];
+  v_new_courts smallint[];
+  v_row record;
+  v_court smallint;
+  i integer;
+BEGIN
+  IF p_event_type NOT IN ('reserva','clase','torneo','mantenimiento') THEN
+    RAISE EXCEPTION 'invalid_event';
+  END IF;
+  SELECT array_agg(DISTINCT c ORDER BY c) INTO v_courts FROM unnest(p_courts) c WHERE c BETWEEN 0 AND 3;
+  IF v_courts IS NULL OR array_length(v_courts, 1) <> coalesce(array_length(p_courts, 1), 0) THEN
+    RAISE EXCEPTION 'invalid_courts';
+  END IF;
+  IF p_event_type IN ('reserva','clase') AND array_length(v_courts, 1) <> 1 THEN
+    RAISE EXCEPTION 'invalid_courts';
+  END IF;
+  IF p_date IS NULL OR p_start IS NULL OR p_end IS NULL OR p_end <= p_start THEN
+    RAISE EXCEPTION 'invalid_time';
+  END IF;
+  IF p_event_type = 'reserva' AND btrim(coalesce(p_titular_name,'')) = '' THEN
+    RAISE EXCEPTION 'titular_required';
+  END IF;
+  IF p_event_type = 'torneo' AND btrim(coalesce(p_title,'')) = '' THEN
+    RAISE EXCEPTION 'title_required';
+  END IF;
+
+  IF p_group_id IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM public.court_reservations WHERE event_group = p_group_id AND status = 'reservada') THEN
+      RAISE EXCEPTION 'event_not_editable';
+    END IF;
+    IF EXISTS (SELECT 1 FROM public.court_reservations WHERE event_group = p_group_id AND status = 'abierta') THEN
+      RAISE EXCEPTION 'event_not_editable';
+    END IF;
+  END IF;
+
+  -- Rows whose court is no longer selected are reused for newly selected courts; leftovers are cancelled.
+  SELECT coalesce(array_agg(id), '{}') INTO v_free_rows FROM public.court_reservations
+  WHERE event_group = v_group AND status = 'reservada' AND NOT (court = ANY (v_courts));
+  SELECT coalesce(array_agg(c), '{}') INTO v_new_courts FROM unnest(v_courts) c
+  WHERE NOT EXISTS (SELECT 1 FROM public.court_reservations r WHERE r.event_group = v_group AND r.status = 'reservada' AND r.court = c);
+
+  FOR i IN 1 .. coalesce(array_length(v_free_rows, 1), 0) LOOP
+    IF i <= coalesce(array_length(v_new_courts, 1), 0) THEN
+      UPDATE public.court_reservations SET court = v_new_courts[i] WHERE id = v_free_rows[i];
+    ELSE
+      UPDATE public.court_reservations SET status = 'cancelada', updated_at = now() WHERE id = v_free_rows[i];
+    END IF;
+  END LOOP;
+
+  FOR v_row IN SELECT id FROM public.court_reservations WHERE event_group = v_group AND status = 'reservada' LOOP
+    UPDATE public.court_reservations SET
+      event_type = p_event_type, reservation_date = p_date, start_time = p_start, end_time = p_end,
+      titular_name = btrim(coalesce(p_titular_name,'')), titular_lot = btrim(coalesce(p_titular_lot,'')),
+      title = btrim(coalesce(p_title,'')), professor = btrim(coalesce(p_professor,'')),
+      student = btrim(coalesce(p_student,'')), notes = btrim(coalesce(p_notes,'')), updated_at = now()
+    WHERE id = v_row.id;
+  END LOOP;
+
+  FOR i IN coalesce(array_length(v_free_rows, 1), 0) + 1 .. coalesce(array_length(v_new_courts, 1), 0) LOOP
+    v_court := v_new_courts[i];
+    INSERT INTO public.court_reservations(
+      court, reservation_date, start_time, end_time, titular_lot, titular_name, notes, status,
+      created_by, event_type, event_group, title, professor, student)
+    VALUES (
+      v_court, p_date, p_start, p_end, btrim(coalesce(p_titular_lot,'')), btrim(coalesce(p_titular_name,'')),
+      btrim(coalesce(p_notes,'')), 'reservada', coalesce(p_user,''), p_event_type, v_group,
+      btrim(coalesce(p_title,'')), btrim(coalesce(p_professor,'')), btrim(coalesce(p_student,'')));
+  END LOOP;
+
+  RETURN v_group;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.cancel_court_event(p_group_id uuid)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+BEGIN
+  UPDATE public.court_reservations SET status = 'cancelada', updated_at = now()
+  WHERE event_group = p_group_id AND status = 'reservada';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'event_not_editable';
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.open_court_session(
+  p_court smallint, p_reservation_id uuid, p_players jsonb,
+  p_titular_name text, p_titular_lot text, p_titular_socio_id uuid, p_user text
+) RETURNS uuid
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_id uuid;
+  v_now timestamp := now() AT TIME ZONE 'America/Argentina/Buenos_Aires';
+  v_busy text;
+BEGIN
+  IF btrim(coalesce(p_titular_name,'')) = '' THEN
+    RAISE EXCEPTION 'titular_required';
+  END IF;
+  IF jsonb_typeof(p_players) <> 'array' OR jsonb_array_length(p_players) NOT BETWEEN 1 AND 4 THEN
+    RAISE EXCEPTION 'invalid_players';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('court_agenda'), p_court);
+  IF EXISTS (SELECT 1 FROM public.court_sessions WHERE court = p_court AND status = 'abierta') THEN
+    RAISE EXCEPTION 'court_already_open';
+  END IF;
+
+  IF p_reservation_id IS NOT NULL THEN
+    PERFORM 1 FROM public.court_reservations
+    WHERE id = p_reservation_id AND status = 'reservada' AND event_type = 'reserva' FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'reservation_not_available';
+    END IF;
+  END IF;
+
+  SELECT to_char(r.reservation_date + r.start_time, 'HH24:MI') || '-' || to_char(r.reservation_date + r.end_time, 'HH24:MI')
+  INTO v_busy
+  FROM public.court_reservations r
+  WHERE r.court = p_court AND r.status = 'reservada' AND r.id IS DISTINCT FROM p_reservation_id
+    AND (r.reservation_date + r.start_time) <= v_now AND (r.reservation_date + r.end_time) > v_now
+  LIMIT 1;
+  IF v_busy IS NOT NULL THEN
+    RAISE EXCEPTION 'court_busy:%', v_busy;
+  END IF;
+
+  INSERT INTO public.court_sessions(court, reservation_id, players, titular_name, titular_lot, titular_socio_id, opened_by)
+  VALUES (p_court, p_reservation_id, p_players, btrim(p_titular_name), btrim(coalesce(p_titular_lot,'')), p_titular_socio_id, coalesce(p_user,''))
+  RETURNING id INTO v_id;
+
+  IF p_reservation_id IS NOT NULL THEN
+    UPDATE public.court_reservations
+    SET status = 'abierta', session_id = v_id, updated_at = now()
+    WHERE id = p_reservation_id;
+  END IF;
+
+  PERFORM public.sync_court_guest_charge(v_id);
+
+  RETURN v_id;
+EXCEPTION WHEN unique_violation THEN
+  RAISE EXCEPTION 'court_already_open';
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.save_court_event(uuid, text, smallint[], date, time, time, text, text, text, text, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.save_court_event(uuid, text, smallint[], date, time, time, text, text, text, text, text, text, text) TO anon, authenticated;
+REVOKE ALL ON FUNCTION public.cancel_court_event(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.cancel_court_event(uuid) TO anon, authenticated;
+######## FIN MIGRACION 4/5 ########
+
+######## MIGRACION 5/5 - nombre: court_guest_price_from_product ########
+/*
+# Precio del cargo INVITADO tomado del producto "Invitado / Prop sin carnet"
+
+1. Nueva función interna `court_guest_price()`: devuelve el precio actual del producto de venta
+   "Invitado / Prop sin carnet" (si no existe, 12000).
+2. `sync_court_guest_charge` usa ese precio al crear el cargo automático de invitados.
+   No se descuenta stock del producto: solo se toma su precio como sugerencia.
+3. Ambas funciones son internas y no pueden ejecutarse directamente desde la app.
+*/
+
+CREATE OR REPLACE FUNCTION public.court_guest_price()
+RETURNS numeric
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = ''
+AS $$
+  SELECT coalesce(
+    (SELECT price FROM public.products
+     WHERE name ILIKE 'invitado%sin carnet%'
+     ORDER BY active DESC, created_at
+     LIMIT 1),
+    12000);
+$$;
+
+REVOKE ALL ON FUNCTION public.court_guest_price() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.court_guest_price() FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.sync_court_guest_charge(p_session_id uuid)
+RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+AS $$
+DECLARE
+  v_manual boolean;
+  v_players jsonb;
+  v_guests integer;
+BEGIN
+  SELECT guest_charge_manual, players INTO v_manual, v_players
+  FROM public.court_sessions WHERE id = p_session_id AND status = 'abierta';
+  IF NOT FOUND OR v_manual THEN
+    RETURN;
+  END IF;
+
+  SELECT count(*) INTO v_guests
+  FROM jsonb_array_elements(v_players) p
+  WHERE coalesce((p->>'is_socio')::boolean, false) = false;
+
+  IF v_guests = 0 THEN
+    DELETE FROM public.court_session_items WHERE session_id = p_session_id AND kind = 'invitado';
+  ELSE
+    INSERT INTO public.court_session_items(session_id, product_id, product_name, price, quantity, kind)
+    VALUES (p_session_id, NULL, 'INVITADO', public.court_guest_price(), v_guests, 'invitado')
+    ON CONFLICT (session_id) WHERE kind = 'invitado'
+    DO UPDATE SET quantity = EXCLUDED.quantity;
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.sync_court_guest_charge(uuid) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sync_court_guest_charge(uuid) FROM anon, authenticated;
+######## FIN MIGRACION 5/5 ########
+
+Despues de aplicarlas, verifica que existan las funciones: open_court_session,
+update_court_session_players, set_court_guest_charge, close_court_session_free, save_court_event,
+cancel_court_event (ejecutables por anon) y las internas sync_court_guest_charge,
+close_court_session_on_sale, find_court_conflict, check_court_event_overlap, court_guest_price
+(NO ejecutables por anon).
+
+---------------------------------------------------------------------
+PASO 2 - TIPOS: agregar al final de src/lib/supabase.ts (sin tocar lo existente)
+---------------------------------------------------------------------
+export interface CourtPlayer {
+  lot: string;
+  name: string;
+  socio_id: string | null;
+  is_socio: boolean;
+}
+
+export interface CourtReservation {
+  id: string;
+  court: number;
+  reservation_date: string;
+  start_time: string;
+  end_time: string;
+  event_type: 'reserva' | 'clase' | 'torneo' | 'mantenimiento';
+  event_group: string;
+  title: string;
+  professor: string;
+  student: string;
+  titular_lot: string;
+  titular_name: string;
+  notes: string;
+  status: 'reservada' | 'abierta' | 'cerrada' | 'cancelada';
+  session_id: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CourtSession {
+  id: string;
+  session_number: number;
+  court: number;
+  reservation_id: string | null;
+  status: 'abierta' | 'cerrada' | 'cancelada';
+  opened_at: string;
+  closed_at: string | null;
+  players: CourtPlayer[];
+  titular_name: string;
+  titular_lot: string;
+  titular_socio_id: string | null;
+  total: number;
+  payment_method: string | null;
+  sale_id: string | null;
+  opened_by: string;
+  closed_by: string;
+  guest_charge_manual: boolean;
+}
+
+export interface CourtSessionItem {
+  id: string;
+  session_id: string;
+  product_id: string | null;
+  kind: 'producto' | 'invitado';
+  product_name: string;
+  price: number;
+  quantity: number;
+  created_at: string;
+}
+
+---------------------------------------------------------------------
+PASO 3 - ARCHIVOS COMPARTIDOS DE COBRO
+---------------------------------------------------------------------
+Crear estos dos archivos tal cual. processSale.ts es el checkout que usa CERRAR TURNO
+(inserta la venta en sales con court_session_id, descuenta stock, registra cash_transactions
+y, si hay cuenta corriente, actualiza customer_accounts + current_account_transactions).
+Si en este sistema ya existen con el mismo nombre, compararlos y avisarme antes de reemplazar.
+Ventas NO necesita cambiarse para que Reservas funcione.
+
+######## ARCHIVO: src/lib/processSale.ts ########
+import { supabase, SaleItem, Shift } from './supabase';
+
+export type PaymentMethod = 'efectivo' | 'transferencia' | 'qr' | 'expensas' | 'cuenta_corriente';
+export type PaymentAmounts = Record<PaymentMethod, number>;
+export interface Payment {
+  method: PaymentMethod;
+  amount: number;
+}
+
+export const EMPTY_PAYMENTS: PaymentAmounts = {
+  efectivo: 0,
+  transferencia: 0,
+  qr: 0,
+  expensas: 0,
+  cuenta_corriente: 0,
+};
+
+export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
+  efectivo: 'Efectivo',
+  transferencia: 'Transferencia',
+  qr: 'QR',
+  expensas: 'Expensas',
+  cuenta_corriente: 'Cta. Corriente',
+};
+
+export const LOTE_INCORRECTO_MSG =
+  'Lote incorrecto, por favor ingrese el lote correcto, es importante en ventas en cuenta corriente';
+
+export const isInvalidCcLot = (lot: string) => /^0+$/.test(lot.trim());
+
+export function preparePayments(
+  amounts: PaymentAmounts,
+  total: number,
+  customerName: string,
+  customerLot: string
+): { payments: Payment[] } | { error: string } {
+  let payments = (Object.keys(EMPTY_PAYMENTS) as PaymentMethod[])
+    .map((method) => ({ method, amount: amounts[method] }))
+    .filter((p) => p.amount > 0.009);
+
+  if (payments.length === 0) {
+    payments = [{ method: 'efectivo', amount: total }];
+  }
+
+  const paymentsTotal = payments.reduce((sum, p) => sum + p.amount, 0);
+  if (Math.abs(paymentsTotal - total) > 0.01) {
+    return {
+      error: `La suma de los montos de pago (${paymentsTotal.toFixed(2)}) no coincide con el total (${total.toFixed(2)}).`,
+    };
+  }
+
+  const hasCuentaCorriente = payments.some((p) => p.method === 'cuenta_corriente');
+  if (hasCuentaCorriente && (!customerName.trim() || !customerLot.trim())) {
+    return { error: 'Para ventas en cuenta corriente es obligatorio ingresar el nombre y el número de lote del cliente.' };
+  }
+  if (hasCuentaCorriente && isInvalidCcLot(customerLot)) {
+    return { error: LOTE_INCORRECTO_MSG };
+  }
+  if (payments.some((p) => p.method !== 'efectivo') && (!customerName.trim() || !customerLot.trim())) {
+    return { error: 'Para pagos que no son en efectivo debés completar el nombre y el lote del cliente.' };
+  }
+
+  return { payments };
+}
+
+interface ProcessSaleInput {
+  shift: Shift;
+  items: SaleItem[];
+  payments: Payment[];
+  customerName: string;
+  customerLot: string;
+  courtSessionId?: string;
+}
+
+type ProcessSaleResult =
+  | { ok: true; saleId: string; saleNumber: string }
+  | { ok: false; error: string };
+
+export async function processSale({
+  shift,
+  items,
+  payments,
+  customerName,
+  customerLot,
+  courtSessionId,
+}: ProcessSaleInput): Promise<ProcessSaleResult> {
+  const name = customerName.trim();
+  const lot = customerLot.trim();
+  const total = items.reduce((sum, i) => sum + i.subtotal, 0);
+  const hasCuentaCorriente = payments.some((p) => p.method === 'cuenta_corriente');
+
+  let storedPaymentMethod: PaymentMethod = payments[0].method;
+  if (payments.some((p) => p.method === 'efectivo')) storedPaymentMethod = 'efectivo';
+  if (hasCuentaCorriente && payments.length === 1) storedPaymentMethod = 'cuenta_corriente';
+
+  const saleNumber = `V-${Date.now()}`;
+  const { data: saleResult, error: saleError } = await supabase
+    .from('sales')
+    .insert([{
+      sale_number: saleNumber,
+      user_id: shift.user_id,
+      user_name: shift.user_name,
+      shift_id: shift.id,
+      items,
+      subtotal: total,
+      discount: 0,
+      total,
+      payment_method: storedPaymentMethod,
+      customer_name: name || null,
+      customer_lot: lot || null,
+      payments,
+      court_session_id: courtSessionId ?? null,
+    }])
+    .select()
+    .single();
+
+  if (saleError || !saleResult) {
+    console.error('Error insertando venta:', saleError);
+    const msg = saleError?.message ?? '';
+    if (msg.includes('court_session_not_open') || msg.includes('uq_sales_court_session')) {
+      return { ok: false, error: 'Este turno ya fue cerrado y cobrado. No se generó una nueva venta.' };
+    }
+    return { ok: false, error: `Error al registrar la venta: ${msg}` };
+  }
+
+  const productIds = Array.from(new Set(items.map((i) => i.product_id).filter(Boolean)));
+  const { data: stockRows } = await supabase.from('products').select('id, stock').in('id', productIds);
+  for (const item of items) {
+    const prod = (stockRows || []).find((p) => p.id === item.product_id);
+    if (prod) {
+      const { error: stockError } = await supabase
+        .from('products')
+        .update({ stock: prod.stock - item.quantity })
+        .eq('id', item.product_id);
+      if (stockError) console.error('Error actualizando stock:', stockError);
+      prod.stock -= item.quantity;
+    }
+  }
+
+  const customerSuffix = name || lot ? ` - ${name} (Lote ${lot || '-'})` : '';
+  const cashRows = payments
+    .filter((p) => p.method !== 'cuenta_corriente')
+    .map((p) => ({
+      shift_id: shift.id,
+      type: 'income',
+      category: 'venta',
+      amount: p.amount,
+      payment_method: p.method,
+      description: `Venta ${saleNumber}${customerSuffix}`,
+    }));
+
+  if (hasCuentaCorriente) {
+    const ccAmount = payments.find((p) => p.method === 'cuenta_corriente')!.amount;
+    cashRows.push({
+      shift_id: shift.id,
+      type: 'income',
+      category: 'venta',
+      amount: ccAmount,
+      payment_method: 'cuenta_corriente',
+      description: `Venta ${saleNumber} - ${name} (Lote ${lot || '-'}) [Cuenta Corriente]`,
+    });
+
+    const { data: existingAccount } = await supabase
+      .from('customer_accounts')
+      .select('*')
+      .eq('customer_name', name)
+      .eq('customer_lot', lot)
+      .maybeSingle();
+
+    let accountId: string;
+    let currentDebt = 0;
+
+    if (existingAccount) {
+      accountId = existingAccount.id;
+      currentDebt = Number(existingAccount.total_debt);
+    } else {
+      const { data: newAccount, error: accountError } = await supabase
+        .from('customer_accounts')
+        .insert([{ customer_name: name, customer_lot: lot, total_debt: 0 }])
+        .select()
+        .single();
+
+      if (accountError || !newAccount) {
+        console.error('Error creando cuenta corriente:', accountError);
+        return { ok: false, error: 'Error al registrar la cuenta corriente.' };
+      }
+      accountId = newAccount.id;
+    }
+
+    const newBalance = currentDebt + ccAmount;
+
+    await supabase
+      .from('customer_accounts')
+      .update({ total_debt: newBalance, updated_at: new Date().toISOString() })
+      .eq('id', accountId);
+
+    await supabase.from('current_account_transactions').insert([{
+      customer_account_id: accountId,
+      customer_name: name,
+      customer_lot: lot,
+      type: 'cargo',
+      amount: ccAmount,
+      balance_after: newBalance,
+      sale_id: saleResult.id,
+      sale_number: saleNumber,
+      description: `Venta ${saleNumber}`,
+      user_name: shift.user_name,
+      shift_id: shift.id,
+    }]);
+  }
+
+  if (cashRows.length > 0) {
+    const { error: cashError } = await supabase.from('cash_transactions').insert(cashRows);
+    if (cashError) {
+      console.error('Error insertando caja:', cashError);
+      return { ok: false, error: 'La venta se registró, pero hubo un error al registrar el movimiento en caja.' };
+    }
+  }
+
+  return { ok: true, saleId: saleResult.id, saleNumber };
+}
+######## FIN ARCHIVO: src/lib/processSale.ts ########
+
+######## ARCHIVO: src/components/PaymentFields.tsx ########
+import { BookOpen } from 'lucide-react';
+import { EMPTY_PAYMENTS, PAYMENT_LABELS, PaymentAmounts, PaymentMethod } from '../lib/processSale';
+
+interface PaymentFieldsProps {
+  amounts: PaymentAmounts;
+  onChange: (method: PaymentMethod, amount: number) => void;
+}
+
+const parseAmount = (value: string) => {
+  if (!value) return 0;
+  const n = parseFloat(value.replace(',', '.'));
+  return isNaN(n) ? 0 : n;
+};
+
+export default function PaymentFields({ amounts, onChange }: PaymentFieldsProps) {
+  return (
+    <div className="space-y-2">
+      {(Object.keys(EMPTY_PAYMENTS) as PaymentMethod[]).map((method) => {
+        const isCc = method === 'cuenta_corriente';
+        return (
+          <div
+            key={method}
+            className={`flex items-center justify-between border-2 rounded-xl px-3 py-2.5 transition-all ${
+              isCc
+                ? 'bg-amber-50 border-amber-200 hover:border-amber-400'
+                : 'bg-white border-slate-200 hover:border-emerald-300'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {isCc && <BookOpen size={16} className="text-amber-600" />}
+              <span className={`text-sm font-semibold ${isCc ? 'text-amber-700' : 'text-slate-700'}`}>
+                {PAYMENT_LABELS[method]}
+              </span>
+            </div>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={amounts[method] || ''}
+              onChange={(e) => onChange(method, parseAmount(e.target.value))}
+              className={`w-28 px-2 py-1 border-2 rounded-lg text-sm text-right focus:ring-2 ${
+                isCc
+                  ? 'bg-white border-amber-200 focus:ring-amber-500'
+                  : 'bg-slate-50 border-slate-200 focus:ring-emerald-500'
+              }`}
+              placeholder="0"
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/PaymentFields.tsx ########
+
+---------------------------------------------------------------------
+PASO 4 - ARCHIVOS DEL MODULO (carpeta src/components/reservas/, 13 archivos, textuales)
+---------------------------------------------------------------------
+
+######## ARCHIVO: src/components/reservas/reservasUtils.ts ########
+const TZ = 'America/Argentina/Buenos_Aires';
+
+export const COURTS = [0, 1, 2, 3];
+
+export const courtLabel = (court: number) => `Cancha ${court}`;
+
+export const todayISO = () =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+
+export const nowTimeHHMM = () =>
+  new Intl.DateTimeFormat('es-AR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+
+export const addDaysISO = (iso: string, days: number) => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+export const startOfWeekISO = (iso: string) => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  const offset = (d.getUTCDay() + 6) % 7;
+  return addDaysISO(iso, -offset);
+};
+
+export const formatDateLong = (iso: string) =>
+  new Date(`${iso}T12:00:00Z`).toLocaleDateString('es-AR', {
+    timeZone: 'UTC',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+
+export const formatDateShort = (iso: string) =>
+  new Date(`${iso}T12:00:00Z`).toLocaleDateString('es-AR', {
+    timeZone: 'UTC',
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+  });
+
+export const formatTime = (time: string) => time.slice(0, 5);
+
+export const formatClock = (ts: string) =>
+  new Date(ts).toLocaleTimeString('es-AR', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+
+export const formatDateTime = (ts: string) =>
+  new Date(ts).toLocaleDateString('es-AR', { timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
+
+export const formatDuration = (fromTs: string, toTs?: string | null) => {
+  const ms = Math.max(0, (toTs ? new Date(toTs).getTime() : Date.now()) - new Date(fromTs).getTime());
+  const totalMin = Math.floor(ms / 60000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min`;
+};
+
+export const money = (n: number) =>
+  `$${Number(n).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+export const isGuestProduct = (name: string) => /^invitado.*sin carnet/i.test(name.trim());
+
+export const minutesOf = (hhmm: string) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+};
+
+export const hhmmOf = (minutes: number) => {
+  const m = Math.max(0, Math.min(minutes, 23 * 60 + 59));
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+};
+
+export const localDateOf = (ts: string) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(ts));
+
+export type EventType = 'reserva' | 'clase' | 'torneo' | 'mantenimiento';
+
+export const EVENT_TYPES: EventType[] = ['reserva', 'clase', 'torneo', 'mantenimiento'];
+
+export const EVENT_META: Record<
+  EventType | 'en_juego' | 'jugado',
+  { label: string; block: string; chip: string; button: string }
+> = {
+  reserva: {
+    label: 'RESERVA',
+    block: 'bg-sky-100 border-sky-500 text-sky-900 hover:bg-sky-200',
+    chip: 'bg-sky-600 text-white',
+    button: 'bg-sky-600 hover:bg-sky-700 text-white',
+  },
+  clase: {
+    label: 'CLASE',
+    block: 'bg-emerald-100 border-emerald-500 text-emerald-900 hover:bg-emerald-200',
+    chip: 'bg-emerald-600 text-white',
+    button: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+  },
+  torneo: {
+    label: 'TORNEO',
+    block: 'bg-rose-100 border-rose-500 text-rose-900 hover:bg-rose-200',
+    chip: 'bg-rose-600 text-white',
+    button: 'bg-rose-600 hover:bg-rose-700 text-white',
+  },
+  mantenimiento: {
+    label: 'MANTENIMIENTO',
+    block: 'bg-slate-700 border-slate-900 text-white hover:bg-slate-800',
+    chip: 'bg-slate-800 text-white',
+    button: 'bg-slate-800 hover:bg-slate-900 text-white',
+  },
+  en_juego: {
+    label: 'EN JUEGO',
+    block: 'bg-amber-100 border-amber-500 text-amber-900 hover:bg-amber-200',
+    chip: 'bg-amber-500 text-white',
+    button: 'bg-amber-500 hover:bg-amber-600 text-white',
+  },
+  jugado: {
+    label: 'TURNO JUGADO',
+    block: 'bg-stone-100 border-stone-400 text-stone-700 hover:bg-stone-200',
+    chip: 'bg-stone-500 text-white',
+    button: 'bg-stone-500 text-white',
+  },
+};
+
+export const eventSummary = (r: {
+  event_type: EventType;
+  titular_lot: string;
+  titular_name: string;
+  title: string;
+  professor: string;
+  student: string;
+}) => {
+  if (r.event_type === 'reserva') return `${r.titular_lot ? `Lote ${r.titular_lot} - ` : ''}${r.titular_name}`;
+  if (r.event_type === 'clase')
+    return [r.professor && `Profesor: ${r.professor}`, r.student].filter(Boolean).join(' · ');
+  return r.title;
+};
+
+export const RPC_ERRORS: Record<string, string> = {
+  invalid_event: 'Tipo de evento inválido.',
+  invalid_courts: 'Seleccione una cancha válida.',
+  invalid_time: 'La hora de fin debe ser posterior a la hora de inicio.',
+  title_required: 'Ingrese el nombre del torneo.',
+  event_not_editable: 'Este evento ya no puede modificarse (fue abierto, cerrado o cancelado).',
+  court_already_open: 'Esta cancha ya tiene un turno abierto.',
+  reservation_not_available: 'La reserva ya no está disponible (fue abierta o cancelada).',
+  titular_required: 'Debe indicar el nombre del titular.',
+  invalid_players: 'Debe cargar entre 1 y 4 jugadores.',
+  session_not_open: 'Este turno ya fue cerrado.',
+  session_has_items: 'El turno tiene consumos: debe cobrarse.',
+  invalid_guest_charge: 'Cantidad o precio de invitado inválido.',
+};
+
+export const rpcErrorMessage = (message: string | undefined) => {
+  const busy = message?.match(/court_busy:(\d{2}:\d{2})-(\d{2}:\d{2})/);
+  if (busy) return `Esta cancha ya se encuentra ocupada entre las ${busy[1]} y las ${busy[2]}.`;
+  const key = Object.keys(RPC_ERRORS).find((k) => message?.includes(k));
+  return key ? RPC_ERRORS[key] : `Ocurrió un error: ${message ?? 'desconocido'}`;
+};
+######## FIN ARCHIVO: src/components/reservas/reservasUtils.ts ########
+
+######## ARCHIVO: src/components/reservas/LotPersonInput.tsx ########
+import { useEffect, useState } from 'react';
+import { CheckCircle2, Loader2, UserX } from 'lucide-react';
+import { supabase, CourtPlayer } from '../../lib/supabase';
+
+interface SocioOption {
+  id: string;
+  first_name: string;
+  last_name: string;
+  category: string;
+  carnet_status: string;
+}
+
+interface LotPersonInputProps {
+  value: CourtPlayer;
+  onChange: (player: CourtPlayer) => void;
+  label: string;
+  highlight?: boolean;
+}
+
+const MANUAL = '__manual__';
+const fullName = (s: SocioOption) => `${s.first_name} ${s.last_name}`.trim();
+
+export default function LotPersonInput({ value, onChange, label, highlight }: LotPersonInputProps) {
+  const [options, setOptions] = useState<SocioOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [searchedLot, setSearchedLot] = useState('');
+  const [manual, setManual] = useState(!value.socio_id && !!value.name);
+
+  useEffect(() => {
+    const lot = value.lot.trim();
+    if (!lot) {
+      setOptions([]);
+      setSearchedLot('');
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(async () => {
+      const { data, error } = await supabase
+        .from('socios')
+        .select('id, first_name, last_name, category, carnet_status')
+        .eq('lot_number', lot)
+        .order('category');
+      if (cancelled) return;
+      setLoading(false);
+      setSearchedLot(lot);
+      const found = error ? [] : (data as SocioOption[]) || [];
+      setOptions(found);
+      if (!value.socio_id && value.name.trim()) {
+        const match = found.find((o) => fullName(o).toLowerCase() === value.name.trim().toLowerCase());
+        if (match) {
+          setManual(false);
+          onChange({ ...value, name: fullName(match), socio_id: match.id, is_socio: match.carnet_status === 'activo' });
+        }
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [value.lot]);
+
+  const lotSearched = !!value.lot.trim() && searchedLot === value.lot.trim() && !loading;
+  const noSocios = lotSearched && options.length === 0;
+  const showNameInput = noSocios || manual;
+  const selected = options.find((o) => o.id === value.socio_id);
+
+  const handleLot = (lot: string) => {
+    setManual(false);
+    onChange({ lot, name: '', socio_id: null, is_socio: false });
+  };
+
+  const handleSelect = (id: string) => {
+    if (id === MANUAL) {
+      setManual(true);
+      onChange({ ...value, name: '', socio_id: null, is_socio: false });
+      return;
+    }
+    setManual(false);
+    const socio = options.find((o) => o.id === id);
+    if (!socio) {
+      onChange({ ...value, name: '', socio_id: null, is_socio: false });
+      return;
+    }
+    onChange({ ...value, name: fullName(socio), socio_id: socio.id, is_socio: socio.carnet_status === 'activo' });
+  };
+
+  const status = !value.name.trim()
+    ? null
+    : value.is_socio
+    ? 'socio'
+    : selected
+    ? 'pausado'
+    : 'invitado';
+
+  const borderClass =
+    status === 'socio'
+      ? 'border-emerald-400 bg-emerald-50/60'
+      : status === 'invitado' || status === 'pausado'
+      ? 'border-red-300 bg-red-50/60'
+      : highlight
+      ? 'border-sky-200 bg-sky-50/40'
+      : 'border-slate-200 bg-white';
+
+  return (
+    <div className={`rounded-xl border-2 p-3 transition-colors ${borderClass}`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-600">{label}</span>
+        {status === 'socio' && (
+          <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+            <CheckCircle2 size={14} /> SOCIO
+          </span>
+        )}
+        {status === 'invitado' && (
+          <span className="inline-flex items-center gap-1 text-xs font-bold text-red-700 bg-red-100 px-2 py-0.5 rounded-full">
+            <UserX size={14} /> INVITADO
+          </span>
+        )}
+        {status === 'pausado' && (
+          <span className="inline-flex items-center gap-1 text-xs font-bold text-red-700 bg-red-100 px-2 py-0.5 rounded-full">
+            <UserX size={14} /> CARNET PAUSADO - INVITADO
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-[96px_1fr] gap-2">
+        <div className="relative">
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Lote"
+            value={value.lot}
+            onChange={(e) => handleLot(e.target.value)}
+            className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-sky-500 focus:border-sky-500 bg-white"
+          />
+          {loading && <Loader2 size={14} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 animate-spin" />}
+        </div>
+        {!value.lot.trim() ? (
+          <div className="px-3 py-2.5 text-sm text-slate-400 border-2 border-dashed border-slate-200 rounded-lg bg-white">
+            Ingrese el lote
+          </div>
+        ) : options.length > 0 && !manual ? (
+          <select
+            value={value.socio_id ?? ''}
+            onChange={(e) => handleSelect(e.target.value)}
+            className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="">Seleccionar persona del lote...</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id}>
+                {fullName(o)}
+                {o.carnet_status !== 'activo' ? ' (carnet pausado)' : ''}
+              </option>
+            ))}
+            <option value={MANUAL}>Otra persona (invitado)...</option>
+          </select>
+        ) : showNameInput ? (
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder={noSocios ? 'Lote sin socios - nombre del invitado' : 'Nombre del invitado'}
+              value={value.name}
+              onChange={(e) => onChange({ ...value, name: e.target.value, socio_id: null, is_socio: false })}
+              className="flex-1 min-w-0 px-3 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-sky-500"
+            />
+            {manual && options.length > 0 && (
+              <button
+                type="button"
+                onClick={() => handleSelect('')}
+                className="px-2 text-xs font-semibold text-sky-700 hover:bg-sky-50 rounded-lg"
+              >
+                Socios
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="px-3 py-2.5 text-sm text-slate-400 border-2 border-slate-200 rounded-lg bg-white">Buscando...</div>
+        )}
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/LotPersonInput.tsx ########
+
+######## ARCHIVO: src/components/reservas/EventModal.tsx ########
+import { useEffect, useState } from 'react';
+import { CalendarPlus, GraduationCap, Loader2, PlayCircle, Save, Trophy, Wrench, X, XCircle } from 'lucide-react';
+import { supabase, CourtPlayer, CourtReservation } from '../../lib/supabase';
+import LotPersonInput from './LotPersonInput';
+import {
+  COURTS,
+  EVENT_META,
+  EventType,
+  formatTime,
+  hhmmOf,
+  minutesOf,
+  rpcErrorMessage,
+  todayISO,
+} from './reservasUtils';
+
+interface EventModalProps {
+  type: EventType;
+  event?: CourtReservation;
+  defaultCourt?: number;
+  defaultDate?: string;
+  defaultTime?: string;
+  userName: string;
+  onClose: () => void;
+  onSaved: () => void;
+  onOpenCourt?: (reservation: CourtReservation) => void;
+}
+
+const TITLES: Record<EventType, { create: string; edit: string; icon: typeof Trophy }> = {
+  reserva: { create: 'Registrar reserva', edit: 'Reserva', icon: CalendarPlus },
+  clase: { create: 'Registrar clase', edit: 'Clase', icon: GraduationCap },
+  torneo: { create: 'Registrar torneo', edit: 'Torneo', icon: Trophy },
+  mantenimiento: { create: 'Registrar mantenimiento', edit: 'Mantenimiento', icon: Wrench },
+};
+
+const DEFAULT_DURATION: Record<EventType, number> = { reserva: 90, clase: 60, torneo: 240, mantenimiento: 120 };
+
+const inputClass =
+  'w-full px-3 py-2.5 border-2 border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-sky-500 focus:border-sky-500 disabled:bg-slate-50';
+const labelClass = 'block text-xs font-bold uppercase tracking-wide text-slate-500 mb-2';
+
+export default function EventModal({
+  type,
+  event,
+  defaultCourt = 0,
+  defaultDate,
+  defaultTime,
+  userName,
+  onClose,
+  onSaved,
+  onOpenCourt,
+}: EventModalProps) {
+  const isEdit = !!event;
+  const multiCourt = type === 'torneo' || type === 'mantenimiento';
+  const editable = !isEdit || event!.status === 'reservada';
+  const initialStart = event ? formatTime(event.start_time) : defaultTime ?? '18:00';
+
+  const [courts, setCourts] = useState<number[]>([event?.court ?? defaultCourt]);
+  const [date, setDate] = useState(event?.reservation_date ?? defaultDate ?? todayISO());
+  const [start, setStart] = useState(initialStart);
+  const [end, setEnd] = useState(
+    event ? formatTime(event.end_time) : hhmmOf(minutesOf(initialStart) + DEFAULT_DURATION[type])
+  );
+  const [titular, setTitular] = useState<CourtPlayer>({
+    lot: event?.titular_lot ?? '',
+    name: event?.titular_name ?? '',
+    socio_id: null,
+    is_socio: false,
+  });
+  const [title, setTitle] = useState(event?.title ?? '');
+  const [professor, setProfessor] = useState(event?.professor ?? '');
+  const [student, setStudent] = useState(event?.student ?? '');
+  const [notes, setNotes] = useState(event?.notes ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!event || !multiCourt) return;
+    supabase
+      .from('court_reservations')
+      .select('court')
+      .eq('event_group', event.event_group)
+      .eq('status', event.status)
+      .then(({ data }) => {
+        if (data?.length) setCourts(data.map((r) => r.court as number).sort());
+      });
+  }, [event, multiCourt]);
+
+  const toggleCourt = (c: number) => {
+    if (!multiCourt) return setCourts([c]);
+    setCourts((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c].sort()));
+  };
+
+  const changeStart = (value: string) => {
+    if (value && end && minutesOf(end) > minutesOf(start)) {
+      setEnd(hhmmOf(minutesOf(value) + minutesOf(end) - minutesOf(start)));
+    }
+    setStart(value);
+  };
+
+  const handleSave = async () => {
+    setError('');
+    if (!courts.length) return setError('Seleccione al menos una cancha.');
+    if (!date || !start || !end) return setError('Complete fecha, hora desde y hora hasta.');
+    if (minutesOf(end) <= minutesOf(start)) return setError('La hora "hasta" debe ser posterior a la hora "desde".');
+    if (type === 'reserva' && !titular.name.trim()) return setError('Ingrese el nombre del titular.');
+    if (type === 'torneo' && !title.trim()) return setError('Ingrese el nombre del torneo.');
+    setSaving(true);
+    const { error: rpcError } = await supabase.rpc('save_court_event', {
+      p_group_id: event?.event_group ?? null,
+      p_event_type: type,
+      p_courts: courts,
+      p_date: date,
+      p_start: start,
+      p_end: end,
+      p_titular_name: type === 'reserva' ? titular.name : '',
+      p_titular_lot: type === 'reserva' ? titular.lot : '',
+      p_title: multiCourt ? title : '',
+      p_professor: type === 'clase' ? professor : '',
+      p_student: type === 'clase' ? student : '',
+      p_notes: notes,
+      p_user: userName,
+    });
+    setSaving(false);
+    if (rpcError) return setError(rpcErrorMessage(rpcError.message));
+    onSaved();
+  };
+
+  const handleCancelEvent = async () => {
+    if (!event || !window.confirm(`¿Cancelar este evento (${EVENT_META[type].label})?`)) return;
+    setSaving(true);
+    const { error: rpcError } = await supabase.rpc('cancel_court_event', { p_group_id: event.event_group });
+    setSaving(false);
+    if (rpcError) return setError(rpcErrorMessage(rpcError.message));
+    onSaved();
+  };
+
+  const meta = EVENT_META[type];
+  const Icon = TITLES[type].icon;
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-xl ${meta.chip}`}>
+              <Icon size={20} />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800">{isEdit ? TITLES[type].edit : TITLES[type].create}</h3>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4 overflow-y-auto">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className={labelClass.replace(' mb-2', '')}>{multiCourt ? 'Canchas' : 'Cancha'}</label>
+              {multiCourt && editable && (
+                <button
+                  type="button"
+                  onClick={() => setCourts(courts.length === COURTS.length ? [] : [...COURTS])}
+                  className="text-xs font-semibold text-sky-700 hover:underline"
+                >
+                  {courts.length === COURTS.length ? 'Quitar todas' : 'Todas las canchas'}
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {COURTS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  disabled={!editable}
+                  onClick={() => toggleCourt(c)}
+                  className={`py-2.5 rounded-xl font-bold text-sm border-2 transition-all ${
+                    courts.includes(c)
+                      ? `${meta.chip} border-transparent shadow`
+                      : 'bg-white border-slate-200 text-slate-700 hover:border-slate-400'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className={labelClass}>Fecha</label>
+              <input type="date" value={date} disabled={!editable} onChange={(e) => setDate(e.target.value)} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Desde</label>
+              <input type="time" step={300} value={start} disabled={!editable} onChange={(e) => changeStart(e.target.value)} className={inputClass} />
+            </div>
+            <div>
+              <label className={labelClass}>Hasta</label>
+              <input type="time" step={300} value={end} disabled={!editable} onChange={(e) => setEnd(e.target.value)} className={inputClass} />
+            </div>
+          </div>
+
+          {type === 'reserva' && <LotPersonInput label="Titular" value={titular} onChange={setTitular} highlight />}
+
+          {type === 'clase' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>Profesor (opcional)</label>
+                <input value={professor} disabled={!editable} onChange={(e) => setProfessor(e.target.value)} className={inputClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Alumno o grupo (opcional)</label>
+                <input value={student} disabled={!editable} onChange={(e) => setStudent(e.target.value)} className={inputClass} />
+              </div>
+            </div>
+          )}
+
+          {multiCourt && (
+            <div>
+              <label className={labelClass}>{type === 'torneo' ? 'Nombre del torneo' : 'Motivo'}</label>
+              <input
+                value={title}
+                disabled={!editable}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={type === 'torneo' ? 'Ej: Torneo Villanueva' : 'Ej: Cambio de red'}
+                className={inputClass}
+              />
+            </div>
+          )}
+
+          <div>
+            <label className={labelClass}>Observaciones (opcional)</label>
+            <textarea value={notes} disabled={!editable} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputClass} resize-none`} />
+          </div>
+
+          {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm font-medium">{error}</div>}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-100 space-y-2">
+          {isEdit && editable && type === 'reserva' && onOpenCourt && (
+            <button
+              onClick={() => onOpenCourt(event!)}
+              disabled={saving}
+              className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg transition-colors"
+            >
+              <PlayCircle size={20} /> ABRIR CANCHA
+            </button>
+          )}
+          {editable ? (
+            <div className="flex gap-2">
+              {isEdit && (
+                <button
+                  onClick={handleCancelEvent}
+                  disabled={saving}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-red-200 text-red-600 hover:bg-red-50 font-semibold transition-colors"
+                >
+                  <XCircle size={18} /> Cancelar {type === 'mantenimiento' ? 'bloqueo' : type}
+                </button>
+              )}
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl disabled:bg-slate-300 font-semibold transition-colors ${meta.button}`}
+              >
+                {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                {isEdit ? 'Guardar cambios' : 'Guardar'}
+              </button>
+            </div>
+          ) : (
+            <p className="text-center text-sm text-slate-500">Este evento está {event!.status} y no puede modificarse.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/EventModal.tsx ########
+
+######## ARCHIVO: src/components/reservas/OpenCourtModal.tsx ########
+import { useState } from 'react';
+import { Loader2, PlayCircle, Save, Users, X } from 'lucide-react';
+import { supabase, CourtPlayer, CourtReservation, CourtSession } from '../../lib/supabase';
+import LotPersonInput from './LotPersonInput';
+import { courtLabel, rpcErrorMessage } from './reservasUtils';
+
+interface OpenCourtModalProps {
+  court: number;
+  reservation?: CourtReservation;
+  session?: CourtSession;
+  userName: string;
+  onClose: () => void;
+  onDone: (sessionId: string) => void;
+}
+
+const emptyPlayer = (): CourtPlayer => ({ lot: '', name: '', socio_id: null, is_socio: false });
+
+export default function OpenCourtModal({ court, reservation, session, userName, onClose, onDone }: OpenCourtModalProps) {
+  const [players, setPlayers] = useState<CourtPlayer[]>(
+    session
+      ? [0, 1, 2, 3].map((i) => session.players[i] ?? emptyPlayer())
+      : [
+          reservation
+            ? { lot: reservation.titular_lot, name: reservation.titular_name, socio_id: null, is_socio: false }
+            : emptyPlayer(),
+          emptyPlayer(),
+          emptyPlayer(),
+          emptyPlayer(),
+        ]
+  );
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const updatePlayer = (index: number, player: CourtPlayer) =>
+    setPlayers((prev) => prev.map((p, i) => (i === index ? player : p)));
+
+  const handleOpen = async () => {
+    setError('');
+    const titular = players[0];
+    if (!titular.name.trim()) return setError('El Jugador 1 (titular) es obligatorio.');
+    const incomplete = players.findIndex((p) => p.lot.trim() && !p.name.trim());
+    if (incomplete >= 0) return setError(`Complete el nombre del Jugador ${incomplete + 1} o borre su lote.`);
+
+    const filled = players
+      .filter((p) => p.name.trim())
+      .map((p) => ({ ...p, lot: p.lot.trim(), name: p.name.trim() }));
+
+    setSaving(true);
+    const titularFields = {
+      p_players: filled,
+      p_titular_name: titular.name.trim(),
+      p_titular_lot: titular.lot.trim(),
+      p_titular_socio_id: titular.is_socio ? titular.socio_id : null,
+    };
+
+    if (session) {
+      const { error: rpcError } = await supabase.rpc('update_court_session_players', {
+        p_session_id: session.id,
+        ...titularFields,
+      });
+      setSaving(false);
+      if (rpcError) return setError(rpcErrorMessage(rpcError.message));
+      onDone(session.id);
+      return;
+    }
+
+    const { data, error: rpcError } = await supabase.rpc('open_court_session', {
+      p_court: court,
+      p_reservation_id: reservation?.id ?? null,
+      ...titularFields,
+      p_user: userName,
+    });
+    setSaving(false);
+    if (rpcError || !data) return setError(rpcErrorMessage(rpcError?.message));
+    onDone(data as string);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
+              {session ? <Users size={20} /> : <PlayCircle size={20} />}
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-800">
+                {session ? `Jugadores - ${courtLabel(court)}` : `Abrir ${courtLabel(court)}`}
+              </h3>
+              <p className="text-xs text-slate-500">Hasta 4 jugadores. El Jugador 1 es el titular.</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-3 overflow-y-auto">
+          {players.map((p, i) => (
+            <LotPersonInput
+              key={i}
+              label={i === 0 ? 'Jugador 1 - Titular' : `Jugador ${i + 1}`}
+              value={p}
+              onChange={(player) => updatePlayer(i, player)}
+              highlight={i === 0}
+            />
+          ))}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-100 space-y-3">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm font-medium">{error}</div>
+          )}
+          <button
+            onClick={handleOpen}
+            disabled={saving}
+            className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold shadow-lg transition-colors"
+          >
+            {saving ? <Loader2 size={20} className="animate-spin" /> : session ? <Save size={20} /> : <PlayCircle size={20} />}
+            {session ? 'GUARDAR JUGADORES' : 'ABRIR CANCHA'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/OpenCourtModal.tsx ########
+
+######## ARCHIVO: src/components/reservas/GuestChargeRow.tsx ########
+import { useEffect, useState } from 'react';
+import { Minus, Plus, Trash2, UserPlus } from 'lucide-react';
+import { CourtSessionItem } from '../../lib/supabase';
+import { money } from './reservasUtils';
+
+interface GuestChargeRowProps {
+  item: CourtSessionItem;
+  manual: boolean;
+  editable: boolean;
+  busy: boolean;
+  onSet: (quantity: number, price: number) => void;
+}
+
+export default function GuestChargeRow({ item, manual, editable, busy, onSet }: GuestChargeRowProps) {
+  const price = Number(item.price);
+  const [priceInput, setPriceInput] = useState(String(price));
+
+  useEffect(() => setPriceInput(String(price)), [price]);
+
+  const commitPrice = () => {
+    const n = parseFloat(priceInput.replace(',', '.'));
+    if (isNaN(n) || n < 0) {
+      setPriceInput(String(price));
+      return;
+    }
+    if (n !== price) onSet(item.quantity, n);
+  };
+
+  return (
+    <div className="rounded-xl border-2 border-red-200 bg-red-50/60 p-3">
+      <div className="flex justify-between gap-2 text-sm">
+        <span className="flex items-center gap-2 font-bold text-red-800">
+          <UserPlus size={15} /> INVITADO x{item.quantity}
+        </span>
+        <span className="font-bold text-slate-800">{money(price * item.quantity)}</span>
+      </div>
+      <p className="text-[11px] text-red-700/80 mt-0.5">
+        {manual ? 'Ajustado manualmente' : 'Automático según jugadores invitados'}
+      </p>
+      {editable && (
+        <div className="flex items-center justify-between gap-2 mt-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onSet(item.quantity - 1, price)}
+              disabled={busy}
+              className="w-8 h-8 rounded-lg bg-white hover:bg-red-100 border border-red-200 flex items-center justify-center"
+            >
+              <Minus size={14} />
+            </button>
+            <span className="w-6 text-center font-bold">{item.quantity}</span>
+            <button
+              onClick={() => onSet(item.quantity + 1, price)}
+              disabled={busy}
+              className="w-8 h-8 rounded-lg bg-white hover:bg-red-100 border border-red-200 flex items-center justify-center"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-slate-600">$</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={priceInput}
+              disabled={busy}
+              onChange={(e) => setPriceInput(e.target.value)}
+              onBlur={commitPrice}
+              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+              className="w-24 px-2 py-1 text-sm border-2 border-red-200 rounded-lg text-right bg-white focus:ring-2 focus:ring-red-400"
+            />
+            <button
+              onClick={() => window.confirm('¿Quitar el cargo INVITADO de este turno?') && onSet(0, price)}
+              disabled={busy}
+              className="p-2 rounded-lg text-red-500 hover:bg-red-100"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/GuestChargeRow.tsx ########
+
+######## ARCHIVO: src/components/reservas/CloseTurnoModal.tsx ########
+import { useState } from 'react';
+import { CreditCard, Loader2, X } from 'lucide-react';
+import { CourtSession, SaleItem, Shift } from '../../lib/supabase';
+import { EMPTY_PAYMENTS, PaymentAmounts, preparePayments, processSale } from '../../lib/processSale';
+import PaymentFields from '../PaymentFields';
+import { courtLabel, money } from './reservasUtils';
+
+interface CloseTurnoModalProps {
+  session: CourtSession;
+  items: SaleItem[];
+  shift: Shift;
+  onClose: () => void;
+  onPaid: (saleNumber: string) => void;
+}
+
+export default function CloseTurnoModal({ session, items, shift, onClose, onPaid }: CloseTurnoModalProps) {
+  const total = items.reduce((s, i) => s + i.subtotal, 0);
+  const [amounts, setAmounts] = useState<PaymentAmounts>({ ...EMPTY_PAYMENTS, efectivo: total });
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleConfirm = async () => {
+    if (processing) return;
+    setError('');
+    const prepared = preparePayments(amounts, total, session.titular_name, session.titular_lot);
+    if ('error' in prepared) return setError(prepared.error);
+
+    if (
+      amounts.cuenta_corriente > 0.009 &&
+      !window.confirm(`Esta deuda se cargará a:\n${session.titular_name}\nLote ${session.titular_lot}\n¿Confirmar?`)
+    ) {
+      return;
+    }
+
+    setProcessing(true);
+    const result = await processSale({
+      shift,
+      items,
+      payments: prepared.payments,
+      customerName: session.titular_name,
+      customerLot: session.titular_lot,
+      courtSessionId: session.id,
+    });
+    setProcessing(false);
+    if (!result.ok) return setError(result.error);
+    onPaid(result.saleNumber);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[92vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800">Cobrar turno #{session.session_number}</h3>
+            <p className="text-xs text-slate-500">
+              {courtLabel(session.court)} · Titular: {session.titular_name} (Lote {session.titular_lot || '-'})
+            </p>
+          </div>
+          <button onClick={onClose} disabled={processing} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4 overflow-y-auto">
+          <PaymentFields
+            amounts={amounts}
+            onChange={(method, amount) => setAmounts((prev) => ({ ...prev, [method]: amount }))}
+          />
+          {amounts.cuenta_corriente > 0.009 && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              La cuenta corriente se carga siempre al titular del turno.
+            </p>
+          )}
+          <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl p-4 flex justify-between items-center border-2 border-emerald-300">
+            <span className="text-lg font-bold text-slate-800">Total</span>
+            <span className="text-3xl font-bold text-emerald-600">{money(total)}</span>
+          </div>
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm font-medium">{error}</div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-100">
+          <button
+            onClick={handleConfirm}
+            disabled={processing}
+            className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 disabled:from-slate-300 disabled:to-slate-400 text-white font-bold shadow-lg transition-all"
+          >
+            {processing ? <Loader2 size={22} className="animate-spin" /> : <CreditCard size={22} />}
+            Completar venta y cerrar turno
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/CloseTurnoModal.tsx ########
+
+######## ARCHIVO: src/components/reservas/TurnoView.tsx ########
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, CheckCircle2, Clock, Loader2, Lock, Minus, Plus, Search, Trash2, UserPlus, Users, UserX } from 'lucide-react';
+import { supabase, CourtSession, CourtSessionItem, Product, SaleItem, Shift } from '../../lib/supabase';
+import CloseTurnoModal from './CloseTurnoModal';
+import GuestChargeRow from './GuestChargeRow';
+import OpenCourtModal from './OpenCourtModal';
+import { courtLabel, formatClock, formatDuration, isGuestProduct, money, rpcErrorMessage } from './reservasUtils';
+
+interface TurnoViewProps {
+  sessionId: string;
+  shift: Shift | null;
+  onBack: () => void;
+  onClosed: () => void;
+}
+
+export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoViewProps) {
+  const [session, setSession] = useState<CourtSession | null>(null);
+  const [items, setItems] = useState<CourtSessionItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [search, setSearch] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [showPlayers, setShowPlayers] = useState(false);
+  const [, setTick] = useState(0);
+
+  const loadItems = useCallback(async () => {
+    const { data } = await supabase
+      .from('court_session_items')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('created_at');
+    setItems((data as CourtSessionItem[]) || []);
+  }, [sessionId]);
+
+  const loadProducts = useCallback(async () => {
+    const { data } = await supabase.from('products').select('*').eq('active', true).order('name');
+    setProducts((data as Product[]) || []);
+  }, []);
+
+  const loadSession = useCallback(async () => {
+    const { data, error } = await supabase.from('court_sessions').select('*').eq('id', sessionId).maybeSingle();
+    if (error || !data) {
+      setLoadError('No se pudo cargar el turno.');
+      return;
+    }
+    setSession(data as CourtSession);
+  }, [sessionId]);
+
+  useEffect(() => {
+    loadSession();
+    loadItems();
+    loadProducts();
+    const timer = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(timer);
+  }, [loadSession, loadItems, loadProducts]);
+
+  const isOpen = session?.status === 'abierta';
+  const total = items.reduce((s, i) => s + Number(i.price) * i.quantity, 0);
+  const guestItem = items.find((i) => i.kind === 'invitado');
+  const productItems = items.filter((i) => i.kind !== 'invitado');
+
+  const qtyInTurno = (productId: string) =>
+    items.filter((i) => i.product_id === productId).reduce((s, i) => s + i.quantity, 0);
+
+  const filtered = useMemo(
+    () =>
+      products.filter(
+        (p) => p.stock > 0 && !isGuestProduct(p.name) && p.name.toLowerCase().includes(search.toLowerCase())
+      ),
+    [products, search]
+  );
+
+  const saleItems: SaleItem[] = useMemo(() => {
+    const map = new Map<string, SaleItem>();
+    for (const i of items) {
+      const price = Number(i.price);
+      const key = `${i.kind}|${i.product_id}|${price}`;
+      const prev = map.get(key);
+      map.set(key, {
+        product_id: i.product_id ?? '',
+        product_name: i.product_name,
+        price,
+        quantity: (prev?.quantity ?? 0) + i.quantity,
+        subtotal: (prev?.subtotal ?? 0) + price * i.quantity,
+      });
+    }
+    return Array.from(map.values());
+  }, [items]);
+
+  const withBusy = async (fn: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    await fn();
+    setBusy(false);
+  };
+
+  const addProduct = (product: Product) =>
+    withBusy(async () => {
+      const fresh = await supabase.from('products').select('stock, price').eq('id', product.id).maybeSingle();
+      const stock = fresh.data?.stock ?? product.stock;
+      const price = Number(fresh.data?.price ?? product.price);
+      if (qtyInTurno(product.id) + 1 > stock) {
+        alert('Stock insuficiente');
+        return;
+      }
+      const existing = items.find((i) => i.product_id === product.id && Number(i.price) === price);
+      const { error } = existing
+        ? await supabase.from('court_session_items').update({ quantity: existing.quantity + 1 }).eq('id', existing.id)
+        : await supabase.from('court_session_items').insert([
+            { session_id: sessionId, product_id: product.id, product_name: product.name, price, quantity: 1 },
+          ]);
+      if (error) alert('No se pudo agregar el producto. Verifique que el turno siga abierto.');
+      await Promise.all([loadItems(), loadProducts()]);
+    });
+
+  const changeQty = (item: CourtSessionItem, qty: number) =>
+    withBusy(async () => {
+      if (qty > item.quantity) {
+        const product = products.find((p) => p.id === item.product_id);
+        if (product && qtyInTurno(product.id) + 1 > product.stock) {
+          alert('Stock insuficiente');
+          return;
+        }
+      }
+      const { error } =
+        qty <= 0
+          ? await supabase.from('court_session_items').delete().eq('id', item.id)
+          : await supabase.from('court_session_items').update({ quantity: qty }).eq('id', item.id);
+      if (error) alert('No se pudo modificar el consumo.');
+      await loadItems();
+    });
+
+  const setGuestCharge = (quantity: number, price: number) =>
+    withBusy(async () => {
+      const { error } = await supabase.rpc('set_court_guest_charge', {
+        p_session_id: sessionId,
+        p_quantity: Math.max(0, quantity),
+        p_price: price,
+      });
+      if (error) alert(rpcErrorMessage(error.message));
+      await Promise.all([loadItems(), loadSession()]);
+    });
+
+  const handleCloseTurno = () =>
+    withBusy(async () => {
+      if (!session) return;
+      await loadItems();
+      const { data: latest } = await supabase
+        .from('court_session_items')
+        .select('price, quantity')
+        .eq('session_id', sessionId);
+      const latestTotal = (latest || []).reduce((s, i) => s + Number(i.price) * i.quantity, 0);
+      if (latestTotal > 0) {
+        if (!shift) {
+          alert('No hay un turno de caja abierto. Abra la caja para poder cobrar.');
+          return;
+        }
+        setShowCheckout(true);
+        return;
+      }
+      if (!window.confirm('El turno no tiene consumos ($0). ¿Cerrar la cancha?')) return;
+      const { error } = await supabase.rpc('close_court_session_free', {
+        p_session_id: session.id,
+        p_user: shift?.user_name ?? '',
+      });
+      if (error) {
+        alert(rpcErrorMessage(error.message));
+        await loadSession();
+        return;
+      }
+      onClosed();
+    });
+
+  if (loadError) {
+    return (
+      <div className="bg-white rounded-2xl p-8 text-center space-y-4">
+        <p className="text-red-600 font-semibold">{loadError}</p>
+        <button onClick={onBack} className="px-4 py-2 rounded-xl bg-slate-800 text-white">Volver</button>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="flex justify-center py-20">
+        <Loader2 className="animate-spin text-slate-400" size={32} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-3 justify-between">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 font-semibold text-slate-700 shadow-sm"
+        >
+          <ArrowLeft size={18} /> Canchas
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-500">Turno #{session.session_number}</span>
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-bold ${
+              isOpen ? 'bg-amber-100 text-amber-800' : 'bg-slate-200 text-slate-700'
+            }`}
+          >
+            {isOpen ? 'EN JUEGO' : session.status.toUpperCase()}
+          </span>
+        </div>
+      </div>
+
+      <div className="bg-gradient-to-br from-slate-900 to-slate-800 text-white rounded-2xl p-5 shadow-xl grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-400">Cancha</p>
+          <p className="text-2xl font-bold">{courtLabel(session.court)}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-400">Apertura</p>
+          <p className="text-2xl font-bold">{formatClock(session.opened_at)}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-400">Tiempo</p>
+          <p className="text-2xl font-bold flex items-center gap-2">
+            <Clock size={18} className="text-amber-400" />
+            {formatDuration(session.opened_at, session.closed_at)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-400">Consumo</p>
+          <p className="text-2xl font-bold text-emerald-400">{money(total)}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-bold text-slate-700">Jugadores</h4>
+              {isOpen && (
+                <button
+                  onClick={() => setShowPlayers(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-sky-700 hover:bg-sky-50 border border-sky-200"
+                >
+                  <Users size={14} /> Editar jugadores
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {session.players.map((p, i) => (
+                <div
+                  key={i}
+                  className={`flex items-center justify-between rounded-xl px-3 py-2.5 border-2 ${
+                    p.is_socio ? 'border-emerald-300 bg-emerald-50' : 'border-red-200 bg-red-50'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold uppercase text-slate-500">
+                      Jugador {i + 1}
+                      {i === 0 && ' · Titular'}
+                    </p>
+                    <p className="font-semibold text-slate-800 truncate">{p.name}</p>
+                    <p className="text-xs text-slate-500">Lote {p.lot || '-'}</p>
+                  </div>
+                  {p.is_socio ? (
+                    <span className="flex items-center gap-1 text-xs font-bold text-emerald-700">
+                      <CheckCircle2 size={14} /> SOCIO
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-xs font-bold text-red-700">
+                      <UserX size={14} /> INVITADO
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {isOpen && (
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm space-y-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input
+                  type="text"
+                  placeholder="Buscar producto..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[360px] overflow-y-auto pr-1">
+                {filtered.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => addProduct(p)}
+                    disabled={busy}
+                    className="text-left p-3 rounded-xl border-2 border-slate-200 hover:border-emerald-500 hover:shadow-lg bg-gradient-to-br from-white to-slate-50 transition-all active:scale-95 disabled:opacity-60"
+                  >
+                    <p className="font-bold text-sm text-slate-800 leading-tight">{p.name}</p>
+                    <p className="text-lg font-bold text-emerald-600 mt-1">{money(p.price)}</p>
+                    <p className="text-[10px] text-slate-500">Stock: {p.stock}</p>
+                  </button>
+                ))}
+                {filtered.length === 0 && (
+                  <p className="col-span-full text-center text-sm text-slate-400 py-6">No hay productos con stock.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl border-2 border-emerald-200 p-5 shadow-xl h-fit space-y-4">
+          <h4 className="text-lg font-bold text-slate-800">Consumos</h4>
+          <div className="space-y-2 max-h-[340px] overflow-y-auto">
+            {items.length === 0 && <p className="text-sm text-slate-400 text-center py-6">Sin consumos</p>}
+            {guestItem && (
+              <GuestChargeRow
+                item={guestItem}
+                manual={session.guest_charge_manual}
+                editable={isOpen}
+                busy={busy}
+                onSet={setGuestCharge}
+              />
+            )}
+            {productItems.map((item) => (
+              <div key={item.id} className="rounded-xl border border-slate-200 p-3">
+                <div className="flex justify-between gap-2 text-sm">
+                  <span className="font-semibold text-slate-800">
+                    {item.product_name} x{item.quantity}
+                  </span>
+                  <span className="font-bold text-slate-800">{money(Number(item.price) * item.quantity)}</span>
+                </div>
+                {isOpen && (
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => changeQty(item, item.quantity - 1)}
+                        disabled={busy}
+                        className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center"
+                      >
+                        <Minus size={14} />
+                      </button>
+                      <span className="w-6 text-center font-bold">{item.quantity}</span>
+                      <button
+                        onClick={() => changeQty(item, item.quantity + 1)}
+                        disabled={busy}
+                        className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => changeQty(item, 0)}
+                      disabled={busy}
+                      className="p-2 rounded-lg text-red-500 hover:bg-red-50"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          {isOpen && !guestItem && (
+            <button
+              onClick={() => setGuestCharge(1, Number(products.find((p) => isGuestProduct(p.name))?.price ?? 12000))}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-2 py-2 rounded-xl border-2 border-dashed border-red-200 text-red-700 hover:bg-red-50 text-sm font-semibold"
+            >
+              <UserPlus size={16} /> Agregar cargo INVITADO
+            </button>
+          )}
+          <div className="flex justify-between items-center border-t-2 border-emerald-200 pt-4">
+            <span className="text-xl font-bold text-slate-800">TOTAL</span>
+            <span className="text-3xl font-bold text-emerald-600">{money(total)}</span>
+          </div>
+          {isOpen ? (
+            <button
+              onClick={handleCloseTurno}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-400 text-white font-bold shadow-lg transition-colors"
+            >
+              <Lock size={20} /> CERRAR TURNO
+            </button>
+          ) : (
+            <p className="text-center text-sm text-slate-500">Turno cerrado {session.closed_at && `a las ${formatClock(session.closed_at)}`}</p>
+          )}
+        </div>
+      </div>
+
+      {showPlayers && (
+        <OpenCourtModal
+          court={session.court}
+          session={session}
+          userName={shift?.user_name ?? ''}
+          onClose={() => setShowPlayers(false)}
+          onDone={async () => {
+            setShowPlayers(false);
+            await Promise.all([loadSession(), loadItems()]);
+          }}
+        />
+      )}
+
+      {showCheckout && shift && (
+        <CloseTurnoModal
+          session={session}
+          items={saleItems}
+          shift={shift}
+          onClose={() => setShowCheckout(false)}
+          onPaid={(saleNumber) => {
+            setShowCheckout(false);
+            alert(`Venta ${saleNumber} completada. Turno cerrado.`);
+            onClosed();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/TurnoView.tsx ########
+
+######## ARCHIVO: src/components/reservas/TurnoDetailModal.tsx ########
+import { useEffect, useState } from 'react';
+import { CalendarCheck, Clock, Loader2, Receipt, ShoppingBag, Users, X } from 'lucide-react';
+import { supabase, CourtReservation, CourtSession, CourtSessionItem } from '../../lib/supabase';
+import { PAYMENT_LABELS, Payment } from '../../lib/processSale';
+import { EVENT_META, courtLabel, formatClock, formatDateTime, formatDuration, formatTime, money } from './reservasUtils';
+
+interface SaleDetail {
+  sale_number: string;
+  created_at: string;
+  user_name: string;
+  total: number;
+  payments: Payment[] | null;
+  payment_method: Payment['method'];
+  customer_name: string | null;
+  customer_lot: string | null;
+}
+
+interface Detail {
+  session: CourtSession;
+  items: CourtSessionItem[];
+  reservation: CourtReservation | null;
+  sale: SaleDetail | null;
+}
+
+const sectionTitle = 'flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500 mb-3';
+
+export default function TurnoDetailModal({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const { data: session, error: sErr } = await supabase.from('court_sessions').select('*').eq('id', sessionId).maybeSingle();
+      if (sErr || !session) {
+        setError('No se pudo cargar el detalle del turno.');
+        return;
+      }
+      const s = session as CourtSession;
+      const [itemsRes, resRes, saleRes] = await Promise.all([
+        supabase.from('court_session_items').select('*').eq('session_id', s.id).order('created_at'),
+        s.reservation_id
+          ? supabase.from('court_reservations').select('*').eq('id', s.reservation_id).maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        s.sale_id
+          ? supabase
+              .from('sales')
+              .select('sale_number, created_at, user_name, total, payments, payment_method, customer_name, customer_lot')
+              .eq('id', s.sale_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+      ]);
+      if (itemsRes.error || resRes.error || saleRes.error) {
+        setError('No se pudo cargar el detalle del turno.');
+        return;
+      }
+      setDetail({
+        session: s,
+        items: (itemsRes.data as CourtSessionItem[]) || [],
+        reservation: (resRes.data as CourtReservation | null) ?? null,
+        sale: (saleRes.data as SaleDetail | null) ?? null,
+      });
+    })();
+  }, [sessionId]);
+
+  const s = detail?.session;
+  const reservation = detail?.reservation;
+  const sale = detail?.sale;
+  const itemsTotal = detail?.items.reduce((a, i) => a + Number(i.price) * i.quantity, 0) ?? 0;
+  const payments: Payment[] = sale
+    ? sale.payments?.length
+      ? sale.payments
+      : [{ method: sale.payment_method, amount: Number(sale.total) }]
+    : [];
+  const responsible = reservation ?? s;
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className={`px-2.5 py-1 rounded-lg text-xs font-black tracking-wide ${EVENT_META.jugado.chip}`}>
+              {EVENT_META.jugado.label}
+            </span>
+            <h3 className="text-lg font-bold text-slate-800 truncate">
+              {s ? `Turno #${s.session_number} · ${courtLabel(s.court)}` : 'Detalle del turno'}
+            </h3>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            <X size={20} />
+          </button>
+        </div>
+
+        {error ? (
+          <p className="m-6 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{error}</p>
+        ) : !s || !detail ? (
+          <div className="flex justify-center py-16">
+            <Loader2 className="animate-spin text-slate-400" />
+          </div>
+        ) : (
+          <div className="p-6 space-y-6 overflow-y-auto">
+            <div className="bg-slate-50 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-bold uppercase text-slate-500">
+                  {reservation ? 'Responsable de la reserva' : 'Responsable del turno'}
+                </p>
+                <p className="text-xl font-bold text-slate-900">{responsible!.titular_name}</p>
+                <p className="text-sm text-slate-500">Lote {responsible!.titular_lot || '-'}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[11px] font-bold uppercase text-slate-500">Total cobrado</p>
+                <p className="text-2xl font-bold text-emerald-600">{money(Number(s.total ?? itemsTotal))}</p>
+              </div>
+            </div>
+
+            <section>
+              <p className={sectionTitle}>
+                <Clock size={14} /> Horario
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                {[
+                  ['Fecha', formatDateTime(s.opened_at)],
+                  ['Apertura', formatClock(s.opened_at)],
+                  ['Cierre', s.closed_at ? formatClock(s.closed_at) : '-'],
+                  ['Duración', formatDuration(s.opened_at, s.closed_at)],
+                ].map(([label, value]) => (
+                  <div key={label} className="border border-slate-200 rounded-xl p-2.5">
+                    <p className="text-[11px] text-slate-500 uppercase">{label}</p>
+                    <p className="font-bold text-slate-800">{value}</p>
+                  </div>
+                ))}
+              </div>
+              {reservation && (
+                <p className="mt-2 text-sm text-slate-600 flex items-center gap-2">
+                  <CalendarCheck size={14} className="text-sky-600" />
+                  Reservado de {formatTime(reservation.start_time)} a {formatTime(reservation.end_time)}
+                  {reservation.notes && ` · ${reservation.notes}`}
+                </p>
+              )}
+            </section>
+
+            <section>
+              <p className={sectionTitle}>
+                <Users size={14} /> Jugadores
+              </p>
+              <ul className="grid sm:grid-cols-2 gap-2">
+                {s.players.map((p, i) => (
+                  <li key={i} className="flex items-center justify-between gap-2 border border-slate-200 rounded-xl px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-800 truncate">
+                        J{i + 1}: {p.name}
+                      </p>
+                      <p className="text-xs text-slate-500">Lote {p.lot || '-'}</p>
+                    </div>
+                    <span
+                      className={`shrink-0 px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                        p.is_socio ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      {p.is_socio ? 'SOCIO' : 'INVITADO'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <section>
+              <p className={sectionTitle}>
+                <ShoppingBag size={14} /> Consumos
+              </p>
+              {detail.items.length === 0 ? (
+                <p className="text-sm text-slate-400">Sin consumos.</p>
+              ) : (
+                <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 text-sm">
+                  {detail.items.map((i) => (
+                    <div key={i.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <span className={i.kind === 'invitado' ? 'font-semibold text-red-700' : 'text-slate-800'}>
+                        {i.product_name} x{i.quantity}
+                        <span className="text-slate-400 font-normal"> · {money(Number(i.price))} c/u</span>
+                      </span>
+                      <span className="font-semibold">{money(Number(i.price) * i.quantity)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between px-3 py-2 bg-slate-50 font-bold">
+                    <span>Total</span>
+                    <span>{money(itemsTotal)}</span>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section>
+              <p className={sectionTitle}>
+                <Receipt size={14} /> Pago
+              </p>
+              {sale ? (
+                <div className="space-y-2 text-sm">
+                  <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+                    {payments.map((p, i) => (
+                      <div key={i} className="flex justify-between px-3 py-2">
+                        <span className="font-medium text-slate-700">{PAYMENT_LABELS[p.method] ?? p.method}</span>
+                        <span className="font-semibold">{money(Number(p.amount))}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {payments.some((p) => p.method === 'cuenta_corriente') && (
+                    <p className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2">
+                      Cargado a cuenta corriente de <strong>{sale.customer_name || '-'}</strong> · Lote {sale.customer_lot || '-'}
+                    </p>
+                  )}
+                  <p className="text-slate-500">
+                    Venta {sale.sale_number} · {formatDateTime(sale.created_at)} {formatClock(sale.created_at)} · Cobró: {sale.user_name || '-'}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">{s.status === 'cerrada' ? 'Sin cobro ($0).' : 'Turno sin cobrar.'}</p>
+              )}
+              <p className="mt-2 text-xs text-slate-400">
+                Abrió: {s.opened_by || '-'} · Cerró: {s.closed_by || '-'}
+              </p>
+            </section>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/TurnoDetailModal.tsx ########
+
+######## ARCHIVO: src/components/reservas/CourtCard.tsx ########
+import { CalendarPlus, Clock, Eye, PlayCircle, User } from 'lucide-react';
+import { CourtReservation, CourtSession } from '../../lib/supabase';
+import {
+  EVENT_META,
+  courtLabel,
+  eventSummary,
+  formatClock,
+  formatDuration,
+  formatTime,
+  minutesOf,
+  money,
+  nowTimeHHMM,
+} from './reservasUtils';
+
+interface CourtCardProps {
+  court: number;
+  session?: CourtSession;
+  sessionTotal: number;
+  reservation?: CourtReservation;
+  nextEvent?: CourtReservation;
+  onSchedule: () => void;
+  onOpen: () => void;
+  onViewReservation: () => void;
+  onViewTurno: () => void;
+}
+
+export default function CourtCard({
+  court,
+  session,
+  sessionTotal,
+  reservation,
+  nextEvent,
+  onSchedule,
+  onOpen,
+  onViewReservation,
+  onViewTurno,
+}: CourtCardProps) {
+  const state = session ? 'abierta' : reservation ? 'reservada' : 'libre';
+  const eventType = reservation?.event_type ?? 'reserva';
+  const inProgress = !!reservation && minutesOf(formatTime(reservation.start_time)) <= minutesOf(nowTimeHHMM());
+
+  const reservedTheme = {
+    reserva: { ring: 'border-sky-200 hover:border-sky-400', band: 'from-sky-500 to-blue-600', badge: 'bg-sky-100 text-sky-800', text: 'text-sky-700', soft: 'bg-sky-50' },
+    clase: { ring: 'border-emerald-200 hover:border-emerald-400', band: 'from-emerald-600 to-emerald-700', badge: 'bg-emerald-100 text-emerald-800', text: 'text-emerald-700', soft: 'bg-emerald-50' },
+    torneo: { ring: 'border-rose-200 hover:border-rose-400', band: 'from-rose-500 to-rose-600', badge: 'bg-rose-100 text-rose-800', text: 'text-rose-700', soft: 'bg-rose-50' },
+    mantenimiento: { ring: 'border-slate-300 hover:border-slate-500', band: 'from-slate-700 to-slate-800', badge: 'bg-slate-100 text-slate-800', text: 'text-slate-800', soft: 'bg-slate-100' },
+  }[eventType];
+
+  const theme = {
+    libre: {
+      ring: 'border-emerald-200 hover:border-emerald-400',
+      band: 'from-emerald-500 to-teal-500',
+      badge: 'bg-emerald-100 text-emerald-800',
+      label: 'LIBRE',
+    },
+    reservada: {
+      ...reservedTheme,
+      label: eventType === 'reserva' ? 'RESERVADA' : EVENT_META[eventType].label,
+    },
+    abierta: {
+      ring: 'border-amber-300 hover:border-amber-500',
+      band: 'from-amber-500 to-orange-500',
+      badge: 'bg-amber-100 text-amber-800',
+      label: 'EN JUEGO',
+    },
+  }[state];
+
+  return (
+    <div className={`bg-white rounded-2xl border-2 ${theme.ring} shadow-lg hover:shadow-xl transition-all overflow-hidden flex flex-col`}>
+      <div className={`bg-gradient-to-r ${theme.band} px-5 py-4 flex items-center justify-between text-white`}>
+        <div>
+          <p className="text-xs uppercase tracking-widest opacity-80">Cancha</p>
+          <p className="text-4xl font-black leading-none">{court}</p>
+        </div>
+        <span className={`px-3 py-1 rounded-full text-xs font-bold ${theme.badge} flex items-center gap-1.5`}>
+          {state === 'abierta' && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />}
+          {theme.label}
+        </span>
+      </div>
+
+      <div className="p-5 flex-1 flex flex-col">
+        {state === 'abierta' && session && (
+          <div className="space-y-3 flex-1">
+            <div className="flex items-start gap-3">
+              <User size={18} className="text-slate-400 mt-0.5" />
+              <div className="min-w-0">
+                <p className="font-bold text-slate-800 truncate">{session.titular_name}</p>
+                <p className="text-sm text-slate-500">Lote {session.titular_lot || '-'}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="bg-slate-50 rounded-xl p-2.5">
+                <p className="text-[11px] text-slate-500 uppercase">Apertura</p>
+                <p className="font-bold text-slate-800">{formatClock(session.opened_at)}</p>
+              </div>
+              <div className="bg-slate-50 rounded-xl p-2.5">
+                <p className="text-[11px] text-slate-500 uppercase">Tiempo</p>
+                <p className="font-bold text-slate-800 flex items-center gap-1">
+                  <Clock size={13} className="text-amber-500" />
+                  {formatDuration(session.opened_at)}
+                </p>
+              </div>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 flex items-center justify-between">
+              <span className="text-sm font-semibold text-emerald-800">Consumo</span>
+              <span className="text-xl font-bold text-emerald-700">{money(sessionTotal)}</span>
+            </div>
+          </div>
+        )}
+
+        {state === 'reservada' && reservation && (
+          <div className="space-y-3 flex-1">
+            <div className="text-center py-2">
+              <p className={`text-3xl font-black tracking-tight ${reservedTheme.text}`}>
+                {formatTime(reservation.start_time)} - {formatTime(reservation.end_time)}
+              </p>
+              <p className="text-xs text-slate-500 uppercase mt-1">{inProgress ? 'En curso' : 'Hoy'}</p>
+            </div>
+            <div className={`${reservedTheme.soft} rounded-xl p-3`}>
+              <p className="text-[11px] font-black tracking-wide text-slate-500">{EVENT_META[eventType].label}</p>
+              <p className="font-bold text-slate-800 truncate">
+                {eventSummary(reservation) || (eventType === 'mantenimiento' ? 'Cancha bloqueada' : '-')}
+              </p>
+              {reservation.notes && <p className="text-sm text-slate-500 truncate">{reservation.notes}</p>}
+            </div>
+          </div>
+        )}
+
+        {state === 'libre' && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 py-8">
+            <p className="text-slate-400 text-sm">{courtLabel(court)} disponible</p>
+            {nextEvent && (
+              <p className="text-xs font-semibold text-slate-500 bg-slate-50 rounded-lg px-3 py-1.5">
+                Próximo: {formatTime(nextEvent.start_time)} - {formatTime(nextEvent.end_time)} {EVENT_META[nextEvent.event_type].label}
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="mt-4 grid gap-2 grid-cols-2">
+          {state === 'libre' && (
+            <>
+              <button
+                onClick={onSchedule}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-sky-200 text-sky-700 hover:bg-sky-50 font-bold text-sm transition-colors"
+              >
+                <CalendarPlus size={18} /> AGENDAR
+              </button>
+              <button
+                onClick={onOpen}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow transition-colors"
+              >
+                <PlayCircle size={18} /> ABRIR
+              </button>
+            </>
+          )}
+          {state === 'reservada' && (
+            <button
+              onClick={onViewReservation}
+              className={`col-span-2 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm shadow transition-colors ${EVENT_META[eventType].button}`}
+            >
+              <Eye size={18} /> {eventType === 'reserva' ? 'VER RESERVA' : 'VER DETALLE'}
+            </button>
+          )}
+          {state === 'abierta' && (
+            <button
+              onClick={onViewTurno}
+              className="col-span-2 flex items-center justify-center gap-2 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow transition-colors"
+            >
+              <Eye size={18} /> VER TURNO
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/CourtCard.tsx ########
+
+######## ARCHIVO: src/components/reservas/AgendaTimeline.tsx ########
+import { useEffect, useState } from 'react';
+import { Lock } from 'lucide-react';
+import { CourtReservation } from '../../lib/supabase';
+import { EVENT_META, EventType, hhmmOf, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
+
+export interface AgendaBlock {
+  key: string;
+  kind: EventType | 'en_juego' | 'jugado';
+  court: number;
+  date: string;
+  startMin: number;
+  endMin: number;
+  headline: string;
+  detail: string;
+  reservation?: CourtReservation;
+  sessionId?: string;
+}
+
+export interface AgendaColumn {
+  key: string;
+  label: string;
+  highlight?: boolean;
+  court: number;
+  date: string;
+}
+
+interface AgendaTimelineProps {
+  columns: AgendaColumn[];
+  blocks: AgendaBlock[];
+  onBlockClick: (block: AgendaBlock) => void;
+  onEmptyClick: (court: number, date: string, time: string) => void;
+}
+
+const PX_PER_HOUR = 64;
+const END_HOUR = 24;
+const DEFAULT_START_HOUR = 7;
+
+export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyClick }: AgendaTimelineProps) {
+  const [nowMin, setNowMin] = useState(() => minutesOf(nowTimeHHMM()));
+  useEffect(() => {
+    const t = setInterval(() => setNowMin(minutesOf(nowTimeHHMM())), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const earliest = blocks.reduce((m, b) => Math.min(m, b.startMin), DEFAULT_START_HOUR * 60);
+  const startHour = Math.floor(earliest / 60);
+  const hours = Array.from({ length: END_HOUR - startHour }, (_, i) => startHour + i);
+  const height = (END_HOUR - startHour) * PX_PER_HOUR;
+  const top = (min: number) => ((min - startHour * 60) / 60) * PX_PER_HOUR;
+  const today = todayISO();
+
+  const handleEmpty = (e: React.MouseEvent<HTMLDivElement>, col: AgendaColumn) => {
+    const y = e.clientY - e.currentTarget.getBoundingClientRect().top;
+    const minute = startHour * 60 + Math.floor((y / PX_PER_HOUR) * 2) * 30;
+    onEmptyClick(col.court, col.date, hhmmOf(minute));
+  };
+
+  return (
+    <div className="overflow-x-auto">
+      <div className="min-w-[640px]">
+        <div className="flex sticky top-0 z-20 bg-white border-b border-slate-200">
+          <div className="w-14 shrink-0" />
+          {columns.map((col) => (
+            <div
+              key={col.key}
+              className={`flex-1 text-center py-3 text-sm font-bold capitalize ${col.highlight ? 'text-sky-700' : 'text-slate-700'}`}
+            >
+              {col.label}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex relative" style={{ height }}>
+          <div className="w-14 shrink-0 relative">
+            {hours.map((h) => (
+              <span
+                key={h}
+                className="absolute right-2 -translate-y-1/2 text-[11px] font-semibold text-slate-400"
+                style={{ top: top(h * 60) }}
+              >
+                {h > startHour && `${String(h).padStart(2, '0')}:00`}
+              </span>
+            ))}
+          </div>
+
+          {columns.map((col) => (
+            <div
+              key={col.key}
+              onClick={(e) => handleEmpty(e, col)}
+              className="flex-1 relative border-l border-slate-200 cursor-pointer hover:bg-sky-50/40 transition-colors"
+            >
+              {hours.map((h) => (
+                <div key={h} className="absolute inset-x-0 border-t border-slate-100" style={{ top: top(h * 60) }}>
+                  <div className="border-t border-dashed border-slate-100" style={{ marginTop: PX_PER_HOUR / 2 }} />
+                </div>
+              ))}
+
+              {col.date === today && nowMin >= startHour * 60 && (
+                <div className="absolute inset-x-0 z-10 pointer-events-none" style={{ top: top(nowMin) }}>
+                  <div className="h-0.5 bg-red-500" />
+                  <div className="absolute -left-1 -top-1 w-2.5 h-2.5 rounded-full bg-red-500" />
+                </div>
+              )}
+
+              {blocks
+                .filter((b) => b.court === col.court && b.date === col.date)
+                .map((b) => {
+                  const meta = EVENT_META[b.kind];
+                  const blockHeight = Math.max(top(b.endMin) - top(b.startMin), 22);
+                  const readOnly = b.kind === 'jugado';
+                  const compact = blockHeight <= 34;
+                  return (
+                    <div
+                      key={b.key}
+                      role="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onBlockClick(b);
+                      }}
+                      title={`${hhmmOf(b.startMin)} - ${hhmmOf(b.endMin)} ${meta.label}\n${b.headline}${b.detail ? `\n${b.detail}` : ''}`}
+                      className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all cursor-pointer hover:shadow-md hover:z-10 ${meta.block}`}
+                      style={{ top: top(b.startMin) + 1, height: blockHeight - 2 }}
+                    >
+                      <p className="font-bold flex items-center gap-1 truncate">
+                        {compact ? (
+                          <>
+                            {readOnly && <Lock size={10} className="shrink-0 opacity-60" />}
+                            <span className="font-black truncate">{b.headline}</span>
+                            <span className="font-semibold opacity-70 shrink-0">
+                              {hhmmOf(b.startMin)}-{hhmmOf(b.endMin)}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            {hhmmOf(b.startMin)} - {hhmmOf(b.endMin)}
+                            <span className="font-black tracking-wide">{meta.label}</span>
+                            {readOnly && <Lock size={10} className="shrink-0 opacity-60" />}
+                          </>
+                        )}
+                      </p>
+                      {!compact && <p className="truncate font-semibold">{b.headline}</p>}
+                      {blockHeight > 50 && b.detail && <p className="truncate opacity-80">{b.detail}</p>}
+                    </div>
+                  );
+                })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/AgendaTimeline.tsx ########
+
+######## ARCHIVO: src/components/reservas/ReservationsCalendar.tsx ########
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CalendarPlus, ChevronLeft, ChevronRight, GraduationCap, Lock, Trophy, Wrench } from 'lucide-react';
+import { supabase, CourtReservation, CourtSession } from '../../lib/supabase';
+import AgendaTimeline, { AgendaBlock, AgendaColumn } from './AgendaTimeline';
+import TurnoDetailModal from './TurnoDetailModal';
+import {
+  COURTS,
+  EVENT_META,
+  EventType,
+  addDaysISO,
+  courtLabel,
+  eventSummary,
+  formatClock,
+  formatDateLong,
+  formatDateShort,
+  formatTime,
+  hhmmOf,
+  localDateOf,
+  minutesOf,
+  nowTimeHHMM,
+  startOfWeekISO,
+  todayISO,
+} from './reservasUtils';
+
+type Mode = 'dia' | 'semana' | 'cancha';
+
+interface ReservationsCalendarProps {
+  refreshKey: number;
+  onEdit: (event: CourtReservation) => void;
+  onOpenTurno: (sessionId: string) => void;
+  onCreate: (type: EventType, court: number, date: string, time?: string) => void;
+}
+
+const LAST_MINUTE = 23 * 60 + 59;
+
+const CREATE_BUTTONS: { type: EventType; label: string; icon: typeof Trophy }[] = [
+  { type: 'reserva', label: 'Registrar reserva', icon: CalendarPlus },
+  { type: 'clase', label: 'Registrar clase', icon: GraduationCap },
+  { type: 'torneo', label: 'Registrar torneo', icon: Trophy },
+  { type: 'mantenimiento', label: 'Mantenimiento', icon: Wrench },
+];
+
+const playerLabel = (lot: string, name: string) => `${name}${lot ? ` · Lote ${lot}` : ''}`;
+
+const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): AgendaBlock[] => {
+  const blocks: AgendaBlock[] = [];
+  const byId = new Map(events.map((e) => [e.id, e]));
+  const nowMin = minutesOf(nowTimeHHMM());
+  const today = todayISO();
+
+  for (const e of events) {
+    if (e.status !== 'reservada') continue;
+    const fallback = e.event_type === 'mantenimiento' ? 'Cancha bloqueada' : '';
+    blocks.push({
+      key: e.id,
+      kind: e.event_type,
+      court: e.court,
+      date: e.reservation_date,
+      startMin: minutesOf(formatTime(e.start_time)),
+      endMin: minutesOf(formatTime(e.end_time)),
+      headline: eventSummary(e) || fallback,
+      detail: e.notes,
+      reservation: e,
+    });
+  }
+
+  for (const s of sessions) {
+    const date = localDateOf(s.opened_at);
+    const startMin = minutesOf(formatClock(s.opened_at));
+    const linked = s.reservation_id ? byId.get(s.reservation_id) : undefined;
+    let endMin: number;
+    if (s.status === 'abierta') {
+      const liveEnd = date === today ? nowMin : LAST_MINUTE;
+      endMin = Math.max(liveEnd, linked ? minutesOf(formatTime(linked.end_time)) : 0, startMin + 30);
+    } else {
+      endMin = s.closed_at && localDateOf(s.closed_at) === date ? minutesOf(formatClock(s.closed_at)) : LAST_MINUTE;
+    }
+    blocks.push({
+      key: s.id,
+      kind: s.status === 'abierta' ? 'en_juego' : 'jugado',
+      court: s.court,
+      date,
+      startMin,
+      endMin: Math.min(Math.max(endMin, startMin + 1), LAST_MINUTE),
+      headline: linked ? playerLabel(linked.titular_lot, linked.titular_name) : playerLabel(s.titular_lot, s.titular_name),
+      detail: s.status === 'abierta' ? `Turno #${s.session_number} en curso` : 'Cancha utilizada',
+      sessionId: s.id,
+    });
+  }
+  return blocks.sort((a, b) => a.startMin - b.startMin);
+};
+
+export default function ReservationsCalendar({ refreshKey, onEdit, onOpenTurno, onCreate }: ReservationsCalendarProps) {
+  const [mode, setMode] = useState<Mode>('dia');
+  const [anchor, setAnchor] = useState(todayISO());
+  const [court, setCourt] = useState(0);
+  const [events, setEvents] = useState<CourtReservation[]>([]);
+  const [sessions, setSessions] = useState<CourtSession[]>([]);
+  const [error, setError] = useState('');
+  const [detailId, setDetailId] = useState<string | null>(null);
+
+  const rangeStart = mode === 'dia' ? anchor : startOfWeekISO(anchor);
+  const rangeEnd = mode === 'dia' ? anchor : addDaysISO(rangeStart, 6);
+  const days = useMemo(
+    () => (mode === 'dia' ? [anchor] : Array.from({ length: 7 }, (_, i) => addDaysISO(rangeStart, i))),
+    [mode, anchor, rangeStart]
+  );
+
+  const load = useCallback(async () => {
+    const [eventsRes, sessionsRes] = await Promise.all([
+      supabase
+        .from('court_reservations')
+        .select('*')
+        .gte('reservation_date', rangeStart)
+        .lte('reservation_date', rangeEnd)
+        .in('status', ['reservada', 'abierta', 'cerrada'])
+        .order('start_time'),
+      supabase
+        .from('court_sessions')
+        .select('*')
+        .in('status', ['abierta', 'cerrada'])
+        .gte('opened_at', `${rangeStart}T03:00:00Z`)
+        .lt('opened_at', `${addDaysISO(rangeEnd, 1)}T03:00:00Z`),
+    ]);
+    if (eventsRes.error || sessionsRes.error) {
+      setError('No se pudo cargar la agenda.');
+      return;
+    }
+    setError('');
+    setEvents((eventsRes.data as CourtReservation[]) || []);
+    setSessions((sessionsRes.data as CourtSession[]) || []);
+  }, [rangeStart, rangeEnd]);
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
+  }, [load, refreshKey]);
+
+  const blocks = useMemo(() => buildBlocks(events, sessions), [events, sessions]);
+
+  const handleBlock = (b: AgendaBlock) => {
+    if (b.reservation) onEdit(b.reservation);
+    else if (b.kind === 'en_juego' && b.sessionId) onOpenTurno(b.sessionId);
+    else if (b.kind === 'jugado' && b.sessionId) setDetailId(b.sessionId);
+  };
+
+  const today = todayISO();
+  const columns: AgendaColumn[] =
+    mode === 'dia'
+      ? COURTS.map((c) => ({ key: `c${c}`, label: courtLabel(c), court: c, date: anchor }))
+      : days.map((d) => ({ key: d, label: formatDateShort(d), court, date: d, highlight: d === today }));
+
+  const step = mode === 'dia' ? 1 : 7;
+  const createCourt = mode === 'cancha' ? court : 0;
+  const createDate = anchor < today ? today : anchor;
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
+      <div className="flex flex-wrap gap-2 p-4 border-b border-slate-100">
+        {CREATE_BUTTONS.map((btn) => (
+          <button
+            key={btn.type}
+            onClick={() => onCreate(btn.type, createCourt, createDate)}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all hover:-translate-y-0.5 hover:shadow ${EVENT_META[btn.type].button}`}
+          >
+            <btn.icon size={16} /> {btn.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-slate-100">
+        <div className="flex bg-slate-100 rounded-xl p-1">
+          {(['dia', 'semana', 'cancha'] as Mode[]).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                mode === m ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              {m === 'dia' ? 'Día' : m === 'semana' ? 'Semana' : 'Por cancha'}
+            </button>
+          ))}
+        </div>
+
+        {mode === 'cancha' && (
+          <div className="flex gap-1">
+            {COURTS.map((c) => (
+              <button
+                key={c}
+                onClick={() => setCourt(c)}
+                className={`w-10 h-10 rounded-lg font-bold text-sm ${
+                  court === c ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <button onClick={() => setAnchor(addDaysISO(anchor, -step))} className="p-2 rounded-lg hover:bg-slate-100">
+            <ChevronLeft size={18} />
+          </button>
+          <input
+            type="date"
+            value={anchor}
+            onChange={(e) => e.target.value && setAnchor(e.target.value)}
+            className="px-3 py-2 border border-slate-200 rounded-lg text-sm"
+          />
+          <button onClick={() => setAnchor(addDaysISO(anchor, step))} className="p-2 rounded-lg hover:bg-slate-100">
+            <ChevronRight size={18} />
+          </button>
+          <button onClick={() => setAnchor(todayISO())} className="px-3 py-2 rounded-lg text-sm font-semibold text-sky-700 hover:bg-sky-50">
+            Hoy
+          </button>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-3">
+        <p className="text-sm font-semibold text-slate-600 capitalize">
+          {mode === 'dia'
+            ? formatDateLong(anchor)
+            : `Semana del ${formatDateShort(rangeStart)} al ${formatDateShort(rangeEnd)}${mode === 'cancha' ? ` · ${courtLabel(court)}` : ''}`}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {(Object.keys(EVENT_META) as (keyof typeof EVENT_META)[]).map((k) => (
+            <span key={k} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500">
+              <span className={`w-2.5 h-2.5 rounded-sm ${EVENT_META[k].chip}`} />
+              {EVENT_META[k].label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {error && <p className="px-4 pt-3 text-sm text-red-600">{error}</p>}
+
+      {mode === 'semana' ? (
+        <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+          {days.map((d) => {
+            const dayBlocks = blocks.filter((b) => b.date === d);
+            return (
+              <div
+                key={d}
+                className={`rounded-xl border p-2 min-h-[120px] ${d === today ? 'border-sky-300 bg-sky-50/40' : 'border-slate-200'}`}
+              >
+                <button
+                  onClick={() => onCreate('reserva', 0, d < today ? today : d)}
+                  className="w-full text-left text-xs font-bold uppercase text-slate-500 mb-2 capitalize hover:text-sky-700"
+                >
+                  {formatDateShort(d)}
+                </button>
+                <div className="space-y-1.5">
+                  {dayBlocks.map((b) => (
+                    <button
+                      key={b.key}
+                      onClick={() => handleBlock(b)}
+                      className={`w-full text-left px-2 py-1.5 rounded-lg border-l-4 text-[11px] leading-tight transition-colors ${EVENT_META[b.kind].block}`}
+                    >
+                      <p className="font-bold flex items-center gap-1">
+                        {hhmmOf(b.startMin)}-{hhmmOf(b.endMin)} · C{b.court}
+                        {b.kind === 'jugado' && <Lock size={10} className="opacity-60" />}
+                      </p>
+                      <p className="font-black tracking-wide">{EVENT_META[b.kind].label}</p>
+                      <p className="truncate">{b.headline}</p>
+                    </button>
+                  ))}
+                  {dayBlocks.length === 0 && <p className="text-xs text-slate-300">Sin eventos</p>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="p-4">
+          <AgendaTimeline
+            columns={columns}
+            blocks={blocks}
+            onBlockClick={handleBlock}
+            onEmptyClick={(c, d, time) => onCreate('reserva', c, d, time)}
+          />
+        </div>
+      )}
+
+      {detailId && <TurnoDetailModal sessionId={detailId} onClose={() => setDetailId(null)} />}
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/ReservationsCalendar.tsx ########
+
+######## ARCHIVO: src/components/reservas/TurnosHistory.tsx ########
+import { Fragment, useEffect, useState } from 'react';
+import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { supabase, CourtReservation, CourtSession, CourtSessionItem } from '../../lib/supabase';
+import { PAYMENT_LABELS, PaymentMethod } from '../../lib/processSale';
+import { EVENT_META, addDaysISO, eventSummary, formatClock, formatDateTime, formatDuration, formatTime, money, todayISO } from './reservasUtils';
+
+interface SaleRef {
+  id: string;
+  sale_number: string;
+  payments: { method: PaymentMethod; amount: number }[] | null;
+  payment_method: PaymentMethod;
+}
+
+type Estado = 'Reservada' | 'Abierta' | 'Cerrada' | 'Cancelada';
+
+interface Row {
+  key: string;
+  id: string;
+  court: number;
+  date: string;
+  apertura: string;
+  cierre: string;
+  duracion: string;
+  estado: Estado;
+  session?: CourtSession;
+  reservation?: CourtReservation;
+}
+
+const estadoStyle: Record<Estado, string> = {
+  Reservada: 'bg-sky-100 text-sky-800',
+  Abierta: 'bg-amber-100 text-amber-800',
+  Cerrada: 'bg-emerald-100 text-emerald-800',
+  Cancelada: 'bg-red-100 text-red-700',
+};
+
+const ARG_DAY_START = (iso: string) => `${iso}T03:00:00Z`;
+
+export default function TurnosHistory({ refreshKey }: { refreshKey: number }) {
+  const [from, setFrom] = useState(addDaysISO(todayISO(), -30));
+  const [to, setTo] = useState(todayISO());
+  const [rows, setRows] = useState<Row[]>([]);
+  const [items, setItems] = useState<CourtSessionItem[]>([]);
+  const [sales, setSales] = useState<SaleRef[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const [sessionsRes, reservationsRes] = await Promise.all([
+        supabase
+          .from('court_sessions')
+          .select('*')
+          .gte('opened_at', ARG_DAY_START(from))
+          .lt('opened_at', ARG_DAY_START(addDaysISO(to, 1)))
+          .order('opened_at', { ascending: false }),
+        supabase
+          .from('court_reservations')
+          .select('*')
+          .gte('reservation_date', from)
+          .lte('reservation_date', to)
+          .in('status', ['reservada', 'cancelada']),
+      ]);
+      if (sessionsRes.error || reservationsRes.error) {
+        setError('No se pudo cargar el historial.');
+        setLoading(false);
+        return;
+      }
+      const sessions = (sessionsRes.data as CourtSession[]) || [];
+      const reservations = (reservationsRes.data as CourtReservation[]) || [];
+      const sessionIds = sessions.map((s) => s.id);
+      const saleIds = sessions.map((s) => s.sale_id).filter((id): id is string => !!id);
+
+      const [itemsRes, salesRes] = await Promise.all([
+        sessionIds.length
+          ? supabase.from('court_session_items').select('*').in('session_id', sessionIds)
+          : Promise.resolve({ data: [] }),
+        saleIds.length
+          ? supabase.from('sales').select('id, sale_number, payments, payment_method').in('id', saleIds)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      const sessionRows: Row[] = sessions.map((s) => ({
+        key: s.id,
+        id: `#${s.session_number}`,
+        court: s.court,
+        date: s.opened_at,
+        apertura: formatClock(s.opened_at),
+        cierre: s.closed_at ? formatClock(s.closed_at) : '-',
+        duracion: formatDuration(s.opened_at, s.closed_at),
+        estado: s.status === 'abierta' ? 'Abierta' : s.status === 'cerrada' ? 'Cerrada' : 'Cancelada',
+        session: s,
+      }));
+      const reservationRows: Row[] = reservations.map((r) => ({
+        key: r.id,
+        id: EVENT_META[r.event_type].label,
+        court: r.court,
+        date: `${r.reservation_date}T${formatTime(r.start_time)}:00-03:00`,
+        apertura: formatTime(r.start_time),
+        cierre: formatTime(r.end_time),
+        duracion: '-',
+        estado: r.status === 'cancelada' ? 'Cancelada' : 'Reservada',
+        reservation: r,
+      }));
+
+      setRows([...sessionRows, ...reservationRows].sort((a, b) => b.date.localeCompare(a.date)));
+      setItems((itemsRes.data as CourtSessionItem[]) || []);
+      setSales((salesRes.data as SaleRef[]) || []);
+      setError('');
+      setLoading(false);
+    })();
+  }, [from, to, refreshKey]);
+
+  const paymentText = (s: CourtSession) => {
+    const sale = sales.find((x) => x.id === s.sale_id);
+    if (!sale) return s.status === 'cerrada' ? 'Sin cobro ($0)' : '-';
+    const list = sale.payments?.length ? sale.payments : [{ method: sale.payment_method, amount: Number(s.total) }];
+    return list.map((p) => PAYMENT_LABELS[p.method] ?? p.method).join(' + ');
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm">
+      <div className="flex flex-wrap items-end gap-3 p-4 border-b border-slate-100">
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1">Desde</label>
+          <input type="date" value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1">Hasta</label>
+          <input type="date" value={to} onChange={(e) => e.target.value && setTo(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-lg text-sm" />
+        </div>
+        <p className="text-sm text-slate-500 ml-auto">{rows.length} registros</p>
+      </div>
+
+      {error && <p className="p-4 text-sm text-red-600">{error}</p>}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 className="animate-spin text-slate-400" />
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[860px]">
+            <thead>
+              <tr className="text-left text-xs uppercase text-slate-500 bg-slate-50">
+                <th className="px-3 py-3 w-8" />
+                <th className="px-3 py-3">ID</th>
+                <th className="px-3 py-3">Cancha</th>
+                <th className="px-3 py-3">Fecha</th>
+                <th className="px-3 py-3">Apertura</th>
+                <th className="px-3 py-3">Cierre</th>
+                <th className="px-3 py-3">Duración</th>
+                <th className="px-3 py-3">Titular</th>
+                <th className="px-3 py-3 text-right">Total</th>
+                <th className="px-3 py-3">Pago</th>
+                <th className="px-3 py-3">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="text-center py-10 text-slate-400">
+                    No hay turnos en el período.
+                  </td>
+                </tr>
+              )}
+              {rows.map((row) => {
+                const s = row.session;
+                const isOpen = expanded === row.key;
+                const rowItems = s ? items.filter((i) => i.session_id === s.id) : [];
+                const sale = s ? sales.find((x) => x.id === s.sale_id) : undefined;
+                return (
+                  <Fragment key={row.key}>
+                    <tr
+                      onClick={() => setExpanded(isOpen ? null : row.key)}
+                      className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <td className="px-3 py-3 text-slate-400">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</td>
+                      <td className="px-3 py-3 font-semibold text-slate-700">{row.id}</td>
+                      <td className="px-3 py-3 font-bold">{row.court}</td>
+                      <td className="px-3 py-3">
+                        {s ? formatDateTime(s.opened_at) : row.reservation!.reservation_date.split('-').reverse().join('/')}
+                      </td>
+                      <td className="px-3 py-3">{row.apertura}</td>
+                      <td className="px-3 py-3">{row.cierre}</td>
+                      <td className="px-3 py-3">{row.duracion}</td>
+                      <td className="px-3 py-3">
+                        <p className="font-semibold text-slate-800">
+                          {s?.titular_name ?? (row.reservation!.event_type === 'reserva' ? row.reservation!.titular_name : eventSummary(row.reservation!) || '-')}
+                        </p>
+                        {(s || row.reservation!.event_type === 'reserva') && (
+                          <p className="text-xs text-slate-500">Lote {(s?.titular_lot ?? row.reservation?.titular_lot) || '-'}</p>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right font-bold">{s ? money(s.status === 'cerrada' ? s.total : rowItems.reduce((a, i) => a + Number(i.price) * i.quantity, 0)) : '-'}</td>
+                      <td className="px-3 py-3 text-xs">{s ? paymentText(s) : '-'}</td>
+                      <td className="px-3 py-3">
+                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${estadoStyle[row.estado]}`}>{row.estado}</span>
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-slate-50/70">
+                        <td />
+                        <td colSpan={10} className="px-3 py-4">
+                          {s ? (
+                            <div className="grid md:grid-cols-3 gap-4">
+                              <div>
+                                <p className="text-xs font-bold uppercase text-slate-500 mb-2">Jugadores</p>
+                                <ul className="space-y-1">
+                                  {s.players.map((p, i) => (
+                                    <li key={i} className="flex items-center gap-2">
+                                      <span className={`w-2 h-2 rounded-full ${p.is_socio ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                                      <span className="font-medium">J{i + 1}: {p.name}</span>
+                                      <span className="text-slate-500">Lote {p.lot || '-'}</span>
+                                      <span className={`text-xs font-bold ${p.is_socio ? 'text-emerald-700' : 'text-red-600'}`}>
+                                        {p.is_socio ? 'Socio' : 'Invitado'}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                              <div>
+                                <p className="text-xs font-bold uppercase text-slate-500 mb-2">Productos</p>
+                                {rowItems.length === 0 ? (
+                                  <p className="text-slate-400">Sin consumos</p>
+                                ) : (
+                                  <ul className="space-y-1">
+                                    {rowItems.map((i) => (
+                                      <li key={i.id} className="flex justify-between gap-4">
+                                        <span>{i.product_name} x{i.quantity}</span>
+                                        <span className="font-semibold">{money(Number(i.price) * i.quantity)}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                              <div className="space-y-1">
+                                <p className="text-xs font-bold uppercase text-slate-500 mb-2">Cobro</p>
+                                <p>Venta: <span className="font-semibold">{sale?.sale_number ?? '-'}</span></p>
+                                <p>Abrió: {s.opened_by || '-'}</p>
+                                <p>Cerró: {s.closed_by || '-'}</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-slate-600 space-y-1">
+                              <p>
+                                {EVENT_META[row.reservation!.event_type].label} de {formatTime(row.reservation!.start_time)} a{' '}
+                                {formatTime(row.reservation!.end_time)}
+                                {row.reservation!.event_type === 'reserva' && ' (sin turno abierto)'}.
+                              </p>
+                              {row.reservation!.notes && <p>Observación: {row.reservation!.notes}</p>}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/TurnosHistory.tsx ########
+
+######## ARCHIVO: src/components/reservas/Reservas.tsx ########
+import { useCallback, useEffect, useState } from 'react';
+import { CalendarDays, CalendarPlus, History, LayoutGrid } from 'lucide-react';
+import { supabase, CourtReservation, CourtSession, Shift } from '../../lib/supabase';
+import CourtCard from './CourtCard';
+import EventModal from './EventModal';
+import OpenCourtModal from './OpenCourtModal';
+import TurnoView from './TurnoView';
+import ReservationsCalendar from './ReservationsCalendar';
+import TurnosHistory from './TurnosHistory';
+import { COURTS, EventType, formatTime, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
+
+type Tab = 'canchas' | 'agenda' | 'historial';
+
+interface EventDraft {
+  type: EventType;
+  event?: CourtReservation;
+  court: number;
+  date?: string;
+  time?: string;
+}
+
+interface OpenDraft {
+  court: number;
+  reservation?: CourtReservation;
+}
+
+export default function Reservas({ shift }: { shift: Shift | null }) {
+  const userName = shift?.user_name ?? '';
+  const [tab, setTab] = useState<Tab>('canchas');
+  const [turnoId, setTurnoId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<CourtSession[]>([]);
+  const [totals, setTotals] = useState<Record<string, number>>({});
+  const [todayReservations, setTodayReservations] = useState<CourtReservation[]>([]);
+  const [eventDraft, setEventDraft] = useState<EventDraft | null>(null);
+  const [openDraft, setOpenDraft] = useState<OpenDraft | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [loadError, setLoadError] = useState('');
+
+  const loadBoard = useCallback(async () => {
+    const [sessionsRes, reservationsRes] = await Promise.all([
+      supabase.from('court_sessions').select('*').eq('status', 'abierta'),
+      supabase
+        .from('court_reservations')
+        .select('*')
+        .eq('reservation_date', todayISO())
+        .eq('status', 'reservada')
+        .order('start_time'),
+    ]);
+    if (sessionsRes.error || reservationsRes.error) {
+      setLoadError('No se pudo cargar el estado de las canchas.');
+      return;
+    }
+    setLoadError('');
+    const open = (sessionsRes.data as CourtSession[]) || [];
+    setSessions(open);
+    setTodayReservations((reservationsRes.data as CourtReservation[]) || []);
+
+    if (open.length) {
+      const { data: items } = await supabase
+        .from('court_session_items')
+        .select('session_id, price, quantity')
+        .in('session_id', open.map((s) => s.id));
+      const sums: Record<string, number> = {};
+      for (const i of items || []) {
+        sums[i.session_id] = (sums[i.session_id] ?? 0) + Number(i.price) * i.quantity;
+      }
+      setTotals(sums);
+    } else {
+      setTotals({});
+    }
+  }, []);
+
+  useEffect(() => {
+    loadBoard();
+    const timer = setInterval(loadBoard, 30000);
+    return () => clearInterval(timer);
+  }, [loadBoard, refreshKey]);
+
+  const refresh = () => setRefreshKey((k) => k + 1);
+
+  const courtEvents = (court: number) => {
+    const now = minutesOf(nowTimeHHMM());
+    const pending = todayReservations.filter((r) => r.court === court && minutesOf(formatTime(r.end_time)) > now);
+    const current = pending.find((r) => minutesOf(formatTime(r.start_time)) <= now + 60);
+    return { current, next: current ? undefined : pending[0] };
+  };
+
+  if (turnoId) {
+    return (
+      <TurnoView
+        sessionId={turnoId}
+        shift={shift}
+        onBack={() => {
+          setTurnoId(null);
+          refresh();
+        }}
+        onClosed={() => {
+          setTurnoId(null);
+          refresh();
+        }}
+      />
+    );
+  }
+
+  const tabs: { id: Tab; label: string; icon: typeof LayoutGrid }[] = [
+    { id: 'canchas', label: 'Canchas', icon: LayoutGrid },
+    { id: 'agenda', label: 'Agenda', icon: CalendarDays },
+    { id: 'historial', label: 'Historial', icon: History },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                tab === t.id ? 'bg-slate-900 text-white shadow' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <t.icon size={16} /> {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setEventDraft({ type: 'reserva', court: 0 })}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-semibold shadow transition-colors"
+        >
+          <CalendarPlus size={18} /> Nueva reserva
+        </button>
+      </div>
+
+      {loadError && <p className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{loadError}</p>}
+
+      {tab === 'canchas' && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
+          {COURTS.map((court) => {
+            const session = sessions.find((s) => s.court === court);
+            const { current: reservation, next } = session ? { current: undefined, next: undefined } : courtEvents(court);
+            return (
+              <CourtCard
+                key={court}
+                court={court}
+                session={session}
+                sessionTotal={session ? totals[session.id] ?? 0 : 0}
+                reservation={reservation}
+                nextEvent={next}
+                onSchedule={() => setEventDraft({ type: 'reserva', court })}
+                onOpen={() => setOpenDraft({ court })}
+                onViewReservation={() => reservation && setEventDraft({ type: reservation.event_type, court, event: reservation })}
+                onViewTurno={() => session && setTurnoId(session.id)}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {tab === 'agenda' && (
+        <ReservationsCalendar
+          refreshKey={refreshKey}
+          onEdit={(event) => setEventDraft({ type: event.event_type, court: event.court, event })}
+          onOpenTurno={setTurnoId}
+          onCreate={(type, court, date, time) => setEventDraft({ type, court, date, time })}
+        />
+      )}
+
+      {tab === 'historial' && <TurnosHistory refreshKey={refreshKey} />}
+
+      {eventDraft && (
+        <EventModal
+          type={eventDraft.type}
+          event={eventDraft.event}
+          defaultCourt={eventDraft.court}
+          defaultDate={eventDraft.date}
+          defaultTime={eventDraft.time}
+          userName={userName}
+          onClose={() => setEventDraft(null)}
+          onSaved={() => {
+            setEventDraft(null);
+            refresh();
+          }}
+          onOpenCourt={(reservation) => {
+            setEventDraft(null);
+            setOpenDraft({ court: reservation.court, reservation });
+          }}
+        />
+      )}
+
+      {openDraft && (
+        <OpenCourtModal
+          court={openDraft.court}
+          reservation={openDraft.reservation}
+          userName={userName}
+          onClose={() => setOpenDraft(null)}
+          onDone={(sessionId) => {
+            setOpenDraft(null);
+            refresh();
+            setTurnoId(sessionId);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+######## FIN ARCHIVO: src/components/reservas/Reservas.tsx ########
+
+---------------------------------------------------------------------
+PASO 5 - INTEGRACION EN src/components/Dashboard.tsx (unicos cambios fuera del modulo)
+---------------------------------------------------------------------
+1. Agregar CalendarDays al import de lucide-react.
+2. Importar el modulo:
+     import Reservas from './reservas/Reservas';
+3. Agregar 'reservas' al tipo View:
+     type View = ... | 'reservas';
+4. En el array del menu, inmediatamente despues del item de Ventas:
+     { id: 'reservas' as View, label: 'Reservas', icon: CalendarDays, color: 'from-sky-500 to-blue-600' },
+5. Donde se renderiza cada vista:
+     {currentView === 'reservas' && <Reservas shift={shift} />}
+   (shift = el turno de caja abierto que ya usa Ventas; puede ser null).
+6. En las estadisticas de luces/invitados/paletas del Dashboard, donde el nombre del producto se
+   busca con productMap.get(item.product_id), agregar el respaldo "|| item.product_name || ''",
+   porque el cargo INVITADO de los turnos se guarda en la venta sin product_id. Ejemplo:
+     const productName = (productMap.get(item.product_id) || item.product_name || '').toLowerCase();
+
+---------------------------------------------------------------------
+PASO 6 - VERIFICACION FINAL
+---------------------------------------------------------------------
+- El proyecto compila sin errores.
+- Registrar una reserva Cancha 1 de 18:00 a 19:30 y luego una clase Cancha 1 de 19:00 a 20:00:
+  debe mostrar "Esta cancha ya se encuentra ocupada entre las 18:00 y las 19:30."
+- Una clase de 19:30 a 20:30 en la misma cancha SI debe poder guardarse (horarios contiguos).
+- Un torneo en canchas 0-3 se ve en las 4 columnas; editarlo quitando una cancha la libera.
+- Abrir una cancha con un jugador no socio: aparece "INVITADO x1" con el precio del producto
+  "Invitado / Prop sin carnet". Cerrar el turno cobrando: queda la venta, la caja y el turno
+  como TURNO JUGADO en la agenda con el nombre del responsable; al tocarlo se ve el detalle.
+- Intentar abrir dos veces la misma cancha: "Esta cancha ya tiene un turno abierto."
+
+Al terminar, contame en lenguaje simple que quedo instalado y si algo no coincidia con los requisitos.
+=====================================================================
+FIN DEL PROMPT
+=====================================================================
