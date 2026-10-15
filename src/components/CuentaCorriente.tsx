@@ -16,6 +16,8 @@ import {
   AlertTriangle,
   Trash2,
   Lock,
+  Pencil,
+  Merge,
 } from 'lucide-react';
 
 interface CuentaCorrienteProps {
@@ -28,7 +30,11 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [balanceFilter, setBalanceFilter] = useState<'all' | 'debt' | 'zero'>('all');
-  const [selectedAccount, setSelectedAccount] = useState<CustomerAccount | null>(null);
+  const [editAccount, setEditAccount] = useState<CustomerAccount | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editLot, setEditLot] = useState('');
+  const [editError, setEditError] = useState('');
+  const [editLoading, setEditLoading] = useState(false);
   const [expandedAccount, setExpandedAccount] = useState<string | null>(null);
   const [config, setConfig] = useState<Configuration | null>(null);
 
@@ -110,6 +116,45 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
 
   const totalDebt = accounts.reduce((sum, a) => sum + Number(a.total_debt), 0);
   const debtors = accounts.filter((a) => Number(a.total_debt) > 0).length;
+
+  const openEditAccount = (account: CustomerAccount) => {
+    setEditAccount(account);
+    setEditName(account.customer_name);
+    setEditLot(account.customer_lot);
+    setEditError('');
+  };
+
+  const mergeTarget = editAccount
+    ? accounts.find(
+        (a) =>
+          a.id !== editAccount.id &&
+          a.customer_name.trim().toLowerCase() === editName.trim().toLowerCase() &&
+          a.customer_lot.trim() === editLot.trim()
+      ) || null
+    : null;
+
+  const handleSaveAccount = async () => {
+    if (!editAccount) return;
+    if (!editName.trim()) {
+      setEditError('El nombre es obligatorio.');
+      return;
+    }
+    setEditLoading(true);
+    setEditError('');
+    const { error } = await supabase.rpc('update_customer_account', {
+      p_account_id: editAccount.id,
+      p_name: editName.trim(),
+      p_lot: editLot.trim(),
+    });
+    setEditLoading(false);
+    if (error) {
+      setEditError('No se pudo guardar el cambio. Intentá de nuevo.');
+      return;
+    }
+    setEditAccount(null);
+    setExpandedAccount(null);
+    await loadData();
+  };
 
   const handleOpenPayment = (account: CustomerAccount) => {
     setPaymentAccount(account);
@@ -514,6 +559,14 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
                   )}
 
                   <button
+                    onClick={() => openEditAccount(account)}
+                    className="p-2 text-slate-500 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all"
+                    title="Editar nombre y lote"
+                  >
+                    <Pencil size={18} />
+                  </button>
+
+                  <button
                     onClick={() => printAccount(account)}
                     className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
                     title="Imprimir tarjeta"
@@ -772,6 +825,74 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {editAccount && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <Pencil size={18} className="text-amber-500" />
+                Editar Cliente
+              </h3>
+              <button onClick={() => setEditAccount(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={22} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Nombre</label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={editName}
+                  onChange={(e) => { setEditName(e.target.value); setEditError(''); }}
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-400"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Lote</label>
+                <input
+                  type="text"
+                  value={editLot}
+                  onChange={(e) => { setEditLot(e.target.value); setEditError(''); }}
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:border-amber-400"
+                />
+              </div>
+
+              {mergeTarget && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3">
+                  <Merge size={20} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-amber-800">
+                    Ya existe la cuenta <strong>{mergeTarget.customer_name}</strong> (Lote {mergeTarget.customer_lot || '-'}) con saldo ${Number(mergeTarget.total_debt).toFixed(2)}.
+                    Al guardar se unirán en una sola cuenta con saldo total de{' '}
+                    <strong>${(Number(mergeTarget.total_debt) + Number(editAccount.total_debt)).toFixed(2)}</strong> y todos los movimientos juntos.
+                  </p>
+                </div>
+              )}
+
+              {editError && <p className="text-sm text-red-600">{editError}</p>}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  onClick={() => setEditAccount(null)}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleSaveAccount}
+                  disabled={editLoading || !editName.trim()}
+                  className="flex-1 py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 disabled:from-slate-300 disabled:to-slate-400 text-white rounded-xl font-semibold flex items-center justify-center gap-2 shadow transition-all"
+                >
+                  {mergeTarget ? <Merge size={18} /> : <CheckCircle size={18} />}
+                  {editLoading ? 'Guardando...' : mergeTarget ? 'Unir cuentas' : 'Guardar'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
