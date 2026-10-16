@@ -1,6 +1,6 @@
 import { CarnetPrices, Socio } from './types';
 
-export const TENNIS_DISCOUNT = 0.20;
+export const TENNIS_DISCOUNT = 0.30;
 
 export interface LotCalcDetail {
   socio_name: string;
@@ -21,7 +21,7 @@ export interface LotCalcResult {
 const EMPTY: LotCalcResult = { total_bruto: 0, total_descuento: 0, total_final: 0, details: [] };
 
 const detailFor = (s: Socio, category: string, base: number): LotCalcDetail => {
-  const discount = s.tiene_tenis ? base * TENNIS_DISCOUNT : 0;
+  const discount = s.tiene_tenis && s.tipo_socio === 'INTERNO' ? base * TENNIS_DISCOUNT : 0;
   return {
     socio_name: `${s.last_name}, ${s.first_name}`,
     category,

@@ -697,7 +697,7 @@ export default function Socios({ userName }: SociosProps) {
                   />
                   <span className="text-sm font-medium text-slate-700">Tiene carnet de tenis</span>
                 </label>
-                <span className="text-xs text-cyan-600">(20% descuento)</span>
+                <span className="text-xs text-cyan-600">{isExternoForm ? '(sin descuento para externos)' : '(30% descuento)'}</span>
               </div>
 
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
@@ -735,7 +735,7 @@ export default function Socios({ userName }: SociosProps) {
                 <p className="text-xs text-slate-500 mt-1">Se suma por cada familiar adherente</p>
               </div>
               <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-3">
-                <p className="text-xs text-cyan-700 font-medium">Descuento tenis: 20% aplicado individualmente a cada socio que tenga carnet de tenis</p>
+                <p className="text-xs text-cyan-700 font-medium">Descuento tenis: 30% aplicado individualmente a cada socio SIL que tenga carnet de tenis. Los socios externos no tienen descuento.</p>
               </div>
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-200">
                 <button type="button" onClick={() => setModalView(null)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">Cancelar</button>
