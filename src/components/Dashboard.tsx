@@ -342,7 +342,7 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
                 {currentView === 'caja' && <Caja shift={shift} onCloseShift={onCloseShift} />}
                 {currentView === 'cuentacorriente' && <CuentaCorriente shift={shift} />}
                 {currentView === 'compras' && <Compras shift={shift} />}
-                {currentView === 'socios' && <Socios />}
+                {currentView === 'socios' && <Socios userName={shift?.user_name ?? ''} />}
                 {currentView === 'reservas' && <Reservas shift={shift} />}
                 {currentView === 'reportes' && <Reportes />}
                 {currentView === 'configuracion' && <Configuracion />}

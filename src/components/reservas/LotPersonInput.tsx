@@ -8,6 +8,7 @@ interface SocioOption {
   last_name: string;
   category: string;
   carnet_status: string;
+  external_id: string | null;
 }
 
 interface LotPersonInputProps {
@@ -19,6 +20,9 @@ interface LotPersonInputProps {
 
 const MANUAL = '__manual__';
 const fullName = (s: SocioOption) => `${s.first_name} ${s.last_name}`.trim();
+const isExtSearch = (lot: string) => /^ext/i.test(lot.trim());
+const statusSuffix = (s: SocioOption) =>
+  s.carnet_status === 'baja' ? ' (carnet dado de baja)' : s.carnet_status !== 'activo' ? ' (carnet pausado)' : '';
 
 export default function LotPersonInput({ value, onChange, label, highlight }: LotPersonInputProps) {
   const [options, setOptions] = useState<SocioOption[]>([]);
@@ -36,11 +40,14 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
     let cancelled = false;
     setLoading(true);
     const timer = setTimeout(async () => {
-      const { data, error } = await supabase
-        .from('socios')
-        .select('id, first_name, last_name, category, carnet_status')
-        .eq('lot_number', lot)
-        .order('category');
+      const base = supabase.from('socios').select('id, first_name, last_name, category, carnet_status, external_id');
+      const digits = lot.replace(/\D/g, '');
+      const { data, error } = isExtSearch(lot)
+        ? await (digits
+            ? base.eq('tipo_socio', 'EXTERNO').ilike('external_id', `%${digits}`)
+            : base.eq('tipo_socio', 'EXTERNO')
+          ).order('external_id')
+        : await base.eq('tipo_socio', 'INTERNO').eq('lot_number', lot).order('category');
       if (cancelled) return;
       setLoading(false);
       setSearchedLot(lot);
@@ -64,6 +71,7 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
   const noSocios = lotSearched && options.length === 0;
   const showNameInput = noSocios || manual;
   const selected = options.find((o) => o.id === value.socio_id);
+  const extMode = isExtSearch(value.lot);
 
   const handleLot = (lot: string) => {
     setManual(false);
@@ -118,7 +126,7 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
         )}
         {status === 'pausado' && (
           <span className="inline-flex items-center gap-1 text-xs font-bold text-red-700 bg-red-100 px-2 py-0.5 rounded-full">
-            <UserX size={14} /> CARNET PAUSADO - INVITADO
+            <UserX size={14} /> {selected?.carnet_status === 'baja' ? 'CARNET DE BAJA' : 'CARNET PAUSADO'} - INVITADO
           </span>
         )}
       </div>
@@ -126,8 +134,8 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
         <div className="relative">
           <input
             type="text"
-            inputMode="numeric"
-            placeholder="Lote"
+            placeholder="Lote / EXT"
+            title="Numero de lote, o EXT-0001 para socios externos"
             value={value.lot}
             onChange={(e) => handleLot(e.target.value)}
             className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-lg text-sm font-semibold focus:ring-2 focus:ring-sky-500 focus:border-sky-500 bg-white"
@@ -136,7 +144,7 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
         </div>
         {!value.lot.trim() ? (
           <div className="px-3 py-2.5 text-sm text-slate-400 border-2 border-dashed border-slate-200 rounded-lg bg-white">
-            Ingrese el lote
+            Ingrese el lote o EXT-0001
           </div>
         ) : options.length > 0 && !manual ? (
           <select
@@ -144,11 +152,12 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
             onChange={(e) => handleSelect(e.target.value)}
             className="w-full px-3 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-sky-500"
           >
-            <option value="">Seleccionar persona del lote...</option>
+            <option value="">{extMode ? 'Seleccionar socio externo...' : 'Seleccionar persona del lote...'}</option>
             {options.map((o) => (
               <option key={o.id} value={o.id}>
+                {extMode && o.external_id ? `${o.external_id} - ` : ''}
                 {fullName(o)}
-                {o.carnet_status !== 'activo' ? ' (carnet pausado)' : ''}
+                {statusSuffix(o)}
               </option>
             ))}
             <option value={MANUAL}>Otra persona (invitado)...</option>
@@ -157,7 +166,7 @@ export default function LotPersonInput({ value, onChange, label, highlight }: Lo
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder={noSocios ? 'Lote sin socios - nombre del invitado' : 'Nombre del invitado'}
+              placeholder={noSocios ? (extMode ? 'Externo no encontrado - nombre del invitado' : 'Lote sin socios - nombre del invitado') : 'Nombre del invitado'}
               value={value.name}
               onChange={(e) => onChange({ ...value, name: e.target.value, socio_id: null, is_socio: false })}
               className="flex-1 min-w-0 px-3 py-2.5 border-2 border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-sky-500"
