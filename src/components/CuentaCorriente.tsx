@@ -129,17 +129,22 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   const getAccountTransactions = (accountId: string) =>
     transactions.filter((t) => t.customer_account_id === accountId);
 
-  const filteredAccounts = accounts.filter((a) => {
-    const q = search.trim().toLowerCase();
-    const matchesSearch =
-      a.customer_name.toLowerCase().includes(q) ||
-      a.customer_lot.toLowerCase().includes(q);
-    if (!matchesSearch) return false;
-    if (balanceFilter === 'debt') return Number(a.total_debt) > 0;
-    if (balanceFilter === 'zero') return Number(a.total_debt) === 0;
-    if (!q) return Number(a.total_debt) > 0;
-    return true;
-  });
+  const filteredAccounts = accounts
+    .filter((a) => {
+      const q = search.trim().toLowerCase();
+      const matchesSearch =
+        a.customer_name.toLowerCase().includes(q) ||
+        a.customer_lot.toLowerCase().includes(q);
+      if (!matchesSearch) return false;
+      if (balanceFilter === 'debt') return Number(a.total_debt) > 0;
+      if (balanceFilter === 'zero') return Number(a.total_debt) === 0;
+      if (!q) return Number(a.total_debt) > 0;
+      return true;
+    })
+    .sort((a, b) => {
+      const debtDifference = Number(b.total_debt) - Number(a.total_debt);
+      return debtDifference !== 0 ? debtDifference : a.customer_name.localeCompare(b.customer_name);
+    });
 
   const hiddenZeroCount =
     balanceFilter === 'all' && !search.trim()
