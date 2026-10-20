@@ -54,7 +54,7 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [showOldDebtWarning, setShowOldDebtWarning] = useState(false);
   const [oldDebtClients, setOldDebtClients] = useState<{ name: string; lot: string; debt: number; days: number }[]>([]);
-  const [oldDebtSort, setOldDebtSort] = useState<'oldest' | 'highest'>('oldest');
+  const [oldDebtSort, setOldDebtSort] = useState<'oldest' | 'highest'>('highest');
 
   useEffect(() => {
     loadData();
@@ -64,6 +64,32 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
   const loadConfig = async () => {
     const { data } = await supabase.from('configuration').select('*').maybeSingle();
     if (data) setConfig(data);
+  };
+
+  const getOldestOutstandingCargo = (accountTransactions: CurrentAccountTransaction[]) => {
+    const openCharges: { createdAt: string; remaining: number }[] = [];
+    const sortedTransactions = [...accountTransactions].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    sortedTransactions.forEach((transaction) => {
+      const amount = Number(transaction.amount);
+      if (transaction.type === 'cargo' && amount > 0) {
+        openCharges.push({ createdAt: transaction.created_at, remaining: amount });
+        return;
+      }
+      if (transaction.type === 'pago' && amount > 0) {
+        let paymentRemaining = amount;
+        for (const charge of openCharges) {
+          if (paymentRemaining <= 0) break;
+          const applied = Math.min(charge.remaining, paymentRemaining);
+          charge.remaining -= applied;
+          paymentRemaining -= applied;
+        }
+      }
+    });
+
+    return openCharges.find((charge) => charge.remaining > 0.005)?.createdAt || null;
   };
 
   const loadData = async () => {
@@ -83,13 +109,11 @@ export default function CuentaCorriente({ shift }: CuentaCorrienteProps) {
     const oldDebts: { name: string; lot: string; debt: number; days: number }[] = [];
     for (const acct of debtors) {
       const acctTxs = (txData || []).filter(
-        (t: CurrentAccountTransaction) => t.customer_account_id === acct.id && t.type === 'cargo'
+        (t: CurrentAccountTransaction) => t.customer_account_id === acct.id
       );
-      if (acctTxs.length > 0) {
-        const oldest = acctTxs.reduce((o: CurrentAccountTransaction, t: CurrentAccountTransaction) =>
-          new Date(t.created_at) < new Date(o.created_at) ? t : o
-        );
-        const daysOld = Math.floor((Date.now() - new Date(oldest.created_at).getTime()) / (1000 * 60 * 60 * 24));
+      const oldestOutstandingCargo = getOldestOutstandingCargo(acctTxs);
+      if (oldestOutstandingCargo) {
+        const daysOld = Math.floor((Date.now() - new Date(oldestOutstandingCargo).getTime()) / (1000 * 60 * 60 * 24));
         if (daysOld > 30) {
           oldDebts.push({ name: acct.customer_name, lot: acct.customer_lot, debt: Number(acct.total_debt), days: daysOld });
         }
