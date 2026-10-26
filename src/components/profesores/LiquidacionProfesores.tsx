@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, Professor, ProfessorClass, ProfessorSettlement, ProfessorSettlementPayment } from '../../lib/supabase';
 import {
-  GraduationCap, Search, Calendar, DollarSign, Percent, CheckCircle2, Loader2,
+  GraduationCap, DollarSign, Percent, CheckCircle2, Loader2,
   Wallet, FileText, ChevronDown, ChevronRight, X, Save, Filter,
 } from 'lucide-react';
 

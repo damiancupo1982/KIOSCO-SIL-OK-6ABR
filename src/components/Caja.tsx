@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, Shift, CashTransaction, Sale } from '../lib/supabase';
-import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, ShoppingCart, Table, Share2, Printer } from 'lucide-react';
+import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, Table, Share2, Printer } from 'lucide-react';
 
 interface CajaProps {
   shift: Shift | null;

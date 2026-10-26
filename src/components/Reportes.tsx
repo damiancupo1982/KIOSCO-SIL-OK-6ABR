@@ -1,10 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, Sale, Configuration } from '../lib/supabase';
 import {
-  BarChart3,
-  DollarSign,
-  ShoppingBag,
-  TrendingUp,
   X,
   Printer,
   Download,

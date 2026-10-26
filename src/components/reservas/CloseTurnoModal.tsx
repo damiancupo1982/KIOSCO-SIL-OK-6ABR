@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { CreditCard, Loader2, X } from 'lucide-react';
-import { CourtSession, SaleItem, Shift } from '../../lib/supabase';
+import { useEffect, useState } from 'react';
+import { CreditCard, GraduationCap, Loader2, X } from 'lucide-react';
+import { supabase, CourtSession, Professor, SaleItem, Shift } from '../../lib/supabase';
 import { EMPTY_PAYMENTS, PaymentAmounts, preparePayments, processSale } from '../../lib/processSale';
 import PaymentFields from '../PaymentFields';
 import { courtLabel, money } from './reservasUtils';
@@ -14,14 +14,46 @@ interface CloseTurnoModalProps {
 }
 
 export default function CloseTurnoModal({ session, items, shift, onClose, onPaid }: CloseTurnoModalProps) {
-  const total = items.reduce((s, i) => s + i.subtotal, 0);
+  const [saleItems, setSaleItems] = useState<SaleItem[]>(items);
+  const [professors, setProfessors] = useState<Professor[]>([]);
+  const [classProductIds, setClassProductIds] = useState<Set<string>>(new Set());
+  const total = saleItems.reduce((s, i) => s + i.subtotal, 0);
   const [amounts, setAmounts] = useState<PaymentAmounts>({ ...EMPTY_PAYMENTS, efectivo: total });
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    const loadClassProducts = async () => {
+      const productIds = Array.from(new Set(items.map((item) => item.product_id).filter(Boolean)));
+      const [{ data: professorData }, { data: products }] = await Promise.all([
+        supabase.from('professors').select('*').eq('active', true).order('name'),
+        supabase.from('products').select('id, requires_professor').in('id', productIds),
+      ]);
+      setProfessors((professorData || []) as Professor[]);
+      const classIds = new Set((products || []).filter((product) => product.requires_professor).map((product) => product.id));
+      setClassProductIds(classIds);
+      if (session.professor_id) {
+        setSaleItems(items.map((item) => classIds.has(item.product_id) ? { ...item, professor_id: session.professor_id, professor_name: session.professor_name } : item));
+      }
+    };
+    loadClassProducts();
+  }, [items, session.professor_id, session.professor_name]);
+
+  const setItemProfessor = (index: number, professorId: string) => {
+    const professor = professors.find((item) => item.id === professorId);
+    setSaleItems((current) => current.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      professor_id: professorId || null,
+      professor_name: professor?.name || null,
+    } : item));
+  };
+
   const handleConfirm = async () => {
     if (processing) return;
     setError('');
+    const missingProfessor = saleItems.find((item) => classProductIds.has(item.product_id) && !item.professor_id);
+    if (missingProfessor) return setError(`Seleccioná el profesor para ${missingProfessor.product_name}.`);
+
     const prepared = preparePayments(amounts, total, session.titular_name, session.titular_lot);
     if ('error' in prepared) return setError(prepared.error);
 
@@ -35,7 +67,7 @@ export default function CloseTurnoModal({ session, items, shift, onClose, onPaid
     setProcessing(true);
     const result = await processSale({
       shift,
-      items,
+      items: saleItems,
       payments: prepared.payments,
       customerName: session.titular_name,
       customerLot: session.titular_lot,
@@ -62,6 +94,26 @@ export default function CloseTurnoModal({ session, items, shift, onClose, onPaid
         </div>
 
         <div className="p-6 space-y-4 overflow-y-auto">
+          {saleItems.map((item, index) => classProductIds.has(item.product_id) && (
+            <div key={`${item.product_id}-${index}`} className="bg-amber-50 border-2 border-amber-200 rounded-xl p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <GraduationCap size={17} className="text-amber-700" />
+                <span className="text-sm font-bold text-slate-800">{item.product_name}</span>
+              </div>
+              <select
+                value={item.professor_id || ''}
+                onChange={(e) => setItemProfessor(index, e.target.value)}
+                className="w-full px-3 py-2 border-2 border-amber-200 rounded-lg bg-white text-sm text-slate-700 focus:ring-2 focus:ring-amber-400"
+              >
+                <option value="">Seleccionar profesor *</option>
+                {professors.map((professor) => (
+                  <option key={professor.id} value={professor.id}>{professor.name}</option>
+                ))}
+              </select>
+              {!item.professor_id && <p className="text-xs text-amber-700 font-semibold mt-2">Es obligatorio seleccionar un profesor.</p>}
+            </div>
+          ))}
+
           <PaymentFields
             amounts={amounts}
             onChange={(method, amount) => setAmounts((prev) => ({ ...prev, [method]: amount }))}
@@ -83,7 +135,7 @@ export default function CloseTurnoModal({ session, items, shift, onClose, onPaid
         <div className="px-6 py-4 border-t border-slate-100">
           <button
             onClick={handleConfirm}
-            disabled={processing}
+            disabled={processing || (classProductIds.size > 0 && saleItems.some((item) => classProductIds.has(item.product_id) && !item.professor_id))}
             className="w-full flex items-center justify-center gap-2 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 disabled:from-slate-300 disabled:to-slate-400 text-white font-bold shadow-lg transition-all"
           >
             {processing ? <Loader2 size={22} className="animate-spin" /> : <CreditCard size={22} />}

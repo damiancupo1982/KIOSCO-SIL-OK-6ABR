@@ -221,10 +221,11 @@ export async function processSale({
     }
   }
 
-  let sessionInfo: { event_type: string; professor_id: string | null; professor_name: string; opened_at: string } | null = null;
+  type SessionInfo = { event_type: string; professor_id: string | null; professor_name: string; opened_at: string };
+  let sessionInfo: SessionInfo | null = null;
   if (courtSessionId) {
     const { data } = await supabase.from('court_sessions').select('event_type, professor_id, professor_name, opened_at, court').eq('id', courtSessionId).maybeSingle();
-    sessionInfo = data as typeof sessionInfo;
+    sessionInfo = data as SessionInfo;
   }
   const professorIds = Array.from(new Set(items.map((item) => item.professor_id).filter((id): id is string => !!id)));
   const { data: professors } = professorIds.length

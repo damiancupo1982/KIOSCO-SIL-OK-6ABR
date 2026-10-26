@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Professor } from '../../lib/supabase';
-import { Search, Plus, Edit2, Trash2, GraduationCap, Phone, Mail, Percent, CheckCircle, XCircle, Save, X, Loader2 } from 'lucide-react';
+import { Search, Plus, Edit2, GraduationCap, Phone, Mail, Percent, CheckCircle, XCircle, Save, X, Loader2 } from 'lucide-react';
 
 const inputClass =
   'w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 focus:border-transparent transition';

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, Clock, Loader2, Lock, Minus, Plus, Search, Trash2, UserPlus, Users, UserX } from 'lucide-react';
-import { supabase, CourtSession, CourtSessionItem, Product, SaleItem, Shift } from '../../lib/supabase';
+import { ArrowLeft, CheckCircle2, Clock, GraduationCap, Loader2, Lock, Minus, Plus, Search, Trash2, UserPlus, Users, UserX } from 'lucide-react';
+import { supabase, CourtSession, CourtSessionItem, Product, Professor, SaleItem, Shift } from '../../lib/supabase';
 import CloseTurnoModal from './CloseTurnoModal';
 import GuestChargeRow from './GuestChargeRow';
 import OpenCourtModal from './OpenCourtModal';
@@ -17,6 +17,8 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
   const [session, setSession] = useState<CourtSession | null>(null);
   const [items, setItems] = useState<CourtSessionItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [professors, setProfessors] = useState<Professor[]>([]);
+  const [professorSelections, setProfessorSelections] = useState<Record<string, { id: string; name: string }>>({});
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -38,6 +40,11 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
     setProducts((data as Product[]) || []);
   }, []);
 
+  const loadProfessors = useCallback(async () => {
+    const { data } = await supabase.from('professors').select('*').eq('active', true).order('name');
+    setProfessors((data as Professor[]) || []);
+  }, []);
+
   const loadSession = useCallback(async () => {
     const { data, error } = await supabase.from('court_sessions').select('*').eq('id', sessionId).maybeSingle();
     if (error || !data) {
@@ -51,9 +58,10 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
     loadSession();
     loadItems();
     loadProducts();
+    loadProfessors();
     const timer = setInterval(() => setTick((t) => t + 1), 30000);
     return () => clearInterval(timer);
-  }, [loadSession, loadItems, loadProducts]);
+  }, [loadSession, loadItems, loadProducts, loadProfessors]);
 
   const isOpen = session?.status === 'abierta';
   const isLate = !!session?.is_late_entry;
@@ -76,18 +84,33 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
     const map = new Map<string, SaleItem>();
     for (const i of items) {
       const price = Number(i.price);
-      const key = `${i.kind}|${i.product_id}|${price}`;
+      const productId = i.product_id ?? '';
+      const key = `${i.kind}|${productId}|${price}`;
       const prev = map.get(key);
       map.set(key, {
-        product_id: i.product_id ?? '',
+        product_id: productId,
         product_name: i.product_name,
         price,
         quantity: (prev?.quantity ?? 0) + i.quantity,
         subtotal: (prev?.subtotal ?? 0) + price * i.quantity,
+        professor_id: professorSelections[productId]?.id ?? session?.professor_id ?? null,
+        professor_name: professorSelections[productId]?.name ?? session?.professor_name ?? null,
       });
     }
     return Array.from(map.values());
-  }, [items]);
+  }, [items, professorSelections, session?.professor_id, session?.professor_name]);
+
+  const setProfessorForProduct = (productId: string, professorId: string) => {
+    const professor = professors.find((item) => item.id === professorId);
+    setProfessorSelections((current) => {
+      if (!professor) {
+        const next = { ...current };
+        delete next[productId];
+        return next;
+      }
+      return { ...current, [productId]: { id: professor.id, name: professor.name } };
+    });
+  };
 
   const withBusy = async (fn: () => Promise<void>) => {
     if (busy) return;
@@ -346,6 +369,24 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
                   </span>
                   <span className="font-bold text-slate-800">{money(Number(item.price) * item.quantity)}</span>
                 </div>
+                {products.find((product) => product.id === (item.product_id ?? ''))?.requires_professor && (
+                  <div className="mt-3">
+                    <label className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-amber-700 mb-1.5">
+                      <GraduationCap size={14} /> Profesor de la clase *
+                    </label>
+                    <select
+                      value={professorSelections[item.product_id ?? '']?.id ?? session.professor_id ?? ''}
+                      onChange={(e) => setProfessorForProduct(item.product_id ?? '', e.target.value)}
+                      disabled={!isOpen}
+                      className="w-full px-3 py-2 border-2 border-amber-200 rounded-lg bg-amber-50 text-sm text-slate-700 focus:ring-2 focus:ring-amber-400 disabled:opacity-70"
+                    >
+                      <option value="">Seleccionar profesor *</option>
+                      {professors.map((professor) => (
+                        <option key={professor.id} value={professor.id}>{professor.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {isOpen && (
                   <div className="flex items-center justify-between mt-2">
                     <div className="flex items-center gap-2">

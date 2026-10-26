@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase, Shift, User } from './lib/supabase';
+import { supabase, Shift } from './lib/supabase';
 import Dashboard from './components/Dashboard';
 import { Store, LogIn, Eye, EyeOff } from 'lucide-react';
 

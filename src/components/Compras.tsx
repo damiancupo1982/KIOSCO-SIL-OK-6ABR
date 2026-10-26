@@ -88,7 +88,6 @@ export default function Compras({ shift }: ComprasProps) {
   const [supplier, setSupplier] = useState('');
   const [showNewProductModal, setShowNewProductModal] = useState(false);
   const [newProductName, setNewProductName] = useState('');
-  const [currentUser, setCurrentUser] = useState<any>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [monthTotal, setMonthTotal] = useState(0);
@@ -97,7 +96,6 @@ export default function Compras({ shift }: ComprasProps) {
   useEffect(() => {
     loadProducts();
     loadInvoices();
-    loadCurrentUser();
     loadSummary();
   }, []);
 
@@ -114,11 +112,6 @@ export default function Compras({ shift }: ComprasProps) {
       return () => clearTimeout(t);
     }
   }, [errorMessage]);
-
-  const loadCurrentUser = () => {
-    const stored = localStorage.getItem('currentUser');
-    if (stored) setCurrentUser(JSON.parse(stored));
-  };
 
   const loadSummary = async () => {
     const now = new Date();
