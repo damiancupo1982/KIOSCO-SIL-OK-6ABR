@@ -155,6 +155,22 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
       await loadItems();
     });
 
+  const updateItemPrice = (item: CourtSessionItem, value: string) =>
+    withBusy(async () => {
+      const price = Number(value);
+      if (!Number.isFinite(price) || price < 0) {
+        alert('Ingresá un precio válido.');
+        await loadItems();
+        return;
+      }
+      const { error } = await supabase
+        .from('court_session_items')
+        .update({ price })
+        .eq('id', item.id);
+      if (error) alert('No se pudo actualizar el precio.');
+      await loadItems();
+    });
+
   const setGuestCharge = (quantity: number, price: number) =>
     withBusy(async () => {
       const { error } = await supabase.rpc('set_court_guest_charge', {
@@ -367,7 +383,24 @@ export default function TurnoView({ sessionId, shift, onBack, onClosed }: TurnoV
                   <span className="font-semibold text-slate-800">
                     {item.product_name} x{item.quantity}
                   </span>
-                  <span className="font-bold text-slate-800">{money(Number(item.price) * item.quantity)}</span>
+                  {products.find((product) => product.id === (item.product_id ?? ''))?.requires_professor ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500">$</span>
+                      <input
+                        key={`${item.id}-${item.price}`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        defaultValue={Number(item.price).toFixed(2)}
+                        onBlur={(e) => updateItemPrice(item, e.target.value)}
+                        disabled={!isOpen || busy}
+                        aria-label={`Precio de ${item.product_name}`}
+                        className="w-28 px-2 py-1 text-right font-bold text-slate-800 border-2 border-amber-200 rounded-lg bg-amber-50 focus:ring-2 focus:ring-amber-400 disabled:opacity-70"
+                      />
+                    </div>
+                  ) : (
+                    <span className="font-bold text-slate-800">{money(Number(item.price) * item.quantity)}</span>
+                  )}
                 </div>
                 {products.find((product) => product.id === (item.product_id ?? ''))?.requires_professor && (
                   <div className="mt-3">
