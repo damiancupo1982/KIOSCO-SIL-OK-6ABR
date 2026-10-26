@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag, UserCheck, CalendarDays } from 'lucide-react';
+import { ShoppingCart, Package, Wallet, BarChart3, Settings, Store, Clock, Lightbulb, Users, TrendingUp, Layers, BookOpen, ShoppingBag, UserCheck, CalendarDays, GraduationCap } from 'lucide-react';
 import { Shift, supabase } from '../lib/supabase';
 import Ventas from './Ventas';
 import Stock from './Stock';
@@ -11,8 +11,10 @@ import CuentaCorriente from './CuentaCorriente';
 import Compras from './Compras';
 import Socios from './Socios';
 import Reservas from './reservas/Reservas';
+import Profesores from './profesores/Profesores';
+import LiquidacionProfesores from './profesores/LiquidacionProfesores';
 
-type View = 'ventas' | 'stock' | 'caja' | 'reportes' | 'configuracion' | 'movimientos' | 'cuentacorriente' | 'compras' | 'socios' | 'reservas';
+type View = 'ventas' | 'stock' | 'caja' | 'reportes' | 'configuracion' | 'movimientos' | 'cuentacorriente' | 'compras' | 'socios' | 'reservas' | 'profesores' | 'liquidacion';
 
 interface DashboardProps {
   shift: Shift | null;
@@ -171,6 +173,8 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
     { id: 'cuentacorriente' as View, label: 'Cta. Corriente', icon: BookOpen, color: 'from-amber-500 to-orange-600' },
     { id: 'compras' as View, label: 'Compras', icon: ShoppingBag, color: 'from-indigo-500 to-purple-600' },
     { id: 'socios' as View, label: 'Socios', icon: UserCheck, color: 'from-teal-500 to-cyan-600' },
+    { id: 'profesores' as View, label: 'Profesores', icon: GraduationCap, color: 'from-sky-500 to-blue-600' },
+    { id: 'liquidacion' as View, label: 'Liquidación', icon: Wallet, color: 'from-amber-500 to-orange-600' },
     { id: 'reportes' as View, label: 'Reportes', icon: BarChart3, color: 'from-orange-500 to-red-600' },
     { id: 'configuracion' as View, label: 'Configuración', icon: Settings, color: 'from-gray-500 to-slate-600' },
   ];
@@ -343,6 +347,8 @@ export default function Dashboard({ shift, onCloseShift }: DashboardProps) {
                 {currentView === 'cuentacorriente' && <CuentaCorriente shift={shift} />}
                 {currentView === 'compras' && <Compras shift={shift} />}
                 {currentView === 'socios' && <Socios userName={shift?.user_name ?? ''} />}
+                {currentView === 'profesores' && <Profesores />}
+                {currentView === 'liquidacion' && <LiquidacionProfesores userName={shift?.user_name ?? ''} shiftId={shift?.id ?? null} />}
                 {currentView === 'reservas' && <Reservas shift={shift} />}
                 {currentView === 'reportes' && <Reportes />}
                 {currentView === 'configuracion' && <Configuracion />}

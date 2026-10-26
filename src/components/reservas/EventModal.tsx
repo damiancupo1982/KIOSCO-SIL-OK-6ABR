@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CalendarPlus, GraduationCap, Loader2, PlayCircle, Save, Trophy, Wrench, X, XCircle } from 'lucide-react';
-import { supabase, CourtPlayer, CourtReservation } from '../../lib/supabase';
+import { supabase, CourtPlayer, CourtReservation, Professor } from '../../lib/supabase';
 import LotPersonInput from './LotPersonInput';
 import {
   COURTS,
@@ -68,10 +68,18 @@ export default function EventModal({
   });
   const [title, setTitle] = useState(event?.title ?? '');
   const [professor, setProfessor] = useState(event?.professor ?? '');
+  const [professorId, setProfessorId] = useState<string>(event?.professor_id ?? '');
+  const [professorList, setProfessorList] = useState<Professor[]>([]);
   const [student, setStudent] = useState(event?.student ?? '');
   const [notes, setNotes] = useState(event?.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    supabase.from('professors').select('*').eq('active', true).order('name').then(({ data }) => {
+      setProfessorList((data || []) as Professor[]);
+    });
+  }, []);
 
   useEffect(() => {
     if (!event || !multiCourt) return;
@@ -118,6 +126,7 @@ export default function EventModal({
       p_professor: type === 'clase' ? professor : '',
       p_student: type === 'clase' ? student : '',
       p_notes: notes,
+      p_professor_id: type === 'clase' && professorId ? professorId : null,
       p_user: userName,
     });
     setSaving(false);
@@ -203,10 +212,22 @@ export default function EventModal({
           {type === 'reserva' && <LotPersonInput label="Titular" value={titular} onChange={setTitular} highlight />}
 
           {type === 'clase' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div>
-                <label className={labelClass}>Profesor (opcional)</label>
-                <input value={professor} disabled={!editable} onChange={(e) => setProfessor(e.target.value)} className={inputClass} />
+                <label className={labelClass}>Profesor</label>
+                <select
+                  value={professorId}
+                  disabled={!editable}
+                  onChange={(e) => {
+                    setProfessorId(e.target.value);
+                    const prof = professorList.find((p) => p.id === e.target.value);
+                    setProfessor(prof?.name ?? '');
+                  }}
+                  className={inputClass}
+                >
+                  <option value="">Sin profesor</option>
+                  {professorList.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
               </div>
               <div>
                 <label className={labelClass}>Alumno o grupo (opcional)</label>

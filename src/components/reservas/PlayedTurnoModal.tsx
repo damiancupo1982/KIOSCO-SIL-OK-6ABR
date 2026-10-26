@@ -90,6 +90,7 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
       p_titular_name: titular.name.trim(),
       p_titular_lot: titular.lot.trim(),
       p_titular_socio_id: titular.is_socio ? titular.socio_id : null,
+      p_professor_id: linked?.professor_id ?? null,
       p_user: userName,
     });
     setSaving(false);

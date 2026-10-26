@@ -93,6 +93,12 @@ export async function processSale({
   if (payments.some((p) => p.method === 'efectivo')) storedPaymentMethod = 'efectivo';
   if (hasCuentaCorriente && payments.length === 1) storedPaymentMethod = 'cuenta_corriente';
 
+  const productIds = Array.from(new Set(items.map((i) => i.product_id).filter(Boolean)));
+  const { data: stockRows } = await supabase.from('products').select('id, stock, requires_professor').in('id', productIds);
+  const classProducts = (stockRows || []).filter((p) => p.requires_professor);
+  const missingProfessor = items.find((item) => classProducts.some((p) => p.id === item.product_id) && !item.professor_id);
+  if (missingProfessor) return { ok: false, error: `Seleccioná el profesor para ${missingProfessor.product_name}.` };
+
   const saleNumber = `V-${Date.now()}`;
   const { data: saleResult, error: saleError } = await supabase
     .from('sales')
@@ -123,8 +129,6 @@ export async function processSale({
     return { ok: false, error: `Error al registrar la venta: ${msg}` };
   }
 
-  const productIds = Array.from(new Set(items.map((i) => i.product_id).filter(Boolean)));
-  const { data: stockRows } = await supabase.from('products').select('id, stock').in('id', productIds);
   for (const item of items) {
     const prod = (stockRows || []).find((p) => p.id === item.product_id);
     if (prod) {
@@ -215,6 +219,55 @@ export async function processSale({
       console.error('Error insertando caja:', cashError);
       return { ok: false, error: 'La venta se registró, pero hubo un error al registrar el movimiento en caja.' };
     }
+  }
+
+  let sessionInfo: { event_type: string; professor_id: string | null; professor_name: string; opened_at: string } | null = null;
+  if (courtSessionId) {
+    const { data } = await supabase.from('court_sessions').select('event_type, professor_id, professor_name, opened_at, court').eq('id', courtSessionId).maybeSingle();
+    sessionInfo = data as typeof sessionInfo;
+  }
+  const professorIds = Array.from(new Set(items.map((item) => item.professor_id).filter((id): id is string => !!id)));
+  const { data: professors } = professorIds.length
+    ? await supabase.from('professors').select('id, name').in('id', professorIds)
+    : { data: [] as { id: string; name: string }[] };
+  const paidAmount = payments.filter((payment) => payment.method !== 'cuenta_corriente').reduce((sum, payment) => sum + payment.amount, 0);
+  const paidRatio = total > 0 ? Math.min(1, paidAmount / total) : 0;
+  const classRows = items
+    .filter((item) => classProducts.some((product) => product.id === item.product_id) || sessionInfo?.event_type === 'clase')
+    .map((item) => {
+      const professorId = item.professor_id ?? sessionInfo?.professor_id ?? null;
+      const professorName = item.professor_name ?? professors?.find((p) => p.id === professorId)?.name ?? sessionInfo?.professor_name ?? '';
+      const grossAmount = item.subtotal;
+      const collectedAmount = grossAmount * paidRatio;
+      const professor = professorId ? professors?.find((p) => p.id === professorId) : null;
+      const commissionRate = professor?.name ? 0 : 0;
+      return {
+        professor_id: professorId,
+        professor_name: professorName,
+        product_id: item.product_id || null,
+        product_name: item.product_name,
+        sale_id: saleResult.id,
+        sale_number: saleNumber,
+        court_session_id: courtSessionId ?? null,
+        class_date: sessionInfo?.opened_at ? sessionInfo.opened_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+        quantity: item.quantity,
+        gross_amount: grossAmount,
+        collected_amount: collectedAmount,
+        commission_rate: commissionRate,
+        commission_amount: 0,
+        collection_status: paidRatio >= 0.999 ? 'pagada' : 'pendiente',
+      };
+    })
+    .filter((row) => row.professor_id);
+
+  if (classRows.length > 0) {
+    const rowsWithRates = await Promise.all(classRows.map(async (row) => {
+      const { data: professor } = await supabase.from('professors').select('commission_rate').eq('id', row.professor_id).maybeSingle();
+      const rate = Number(professor?.commission_rate ?? 0);
+      return { ...row, commission_rate: rate, commission_amount: row.collected_amount * rate / 100 };
+    }));
+    const { error: classError } = await supabase.from('professor_classes').insert(rowsWithRates);
+    if (classError) console.error('No se pudo registrar la comisión de la clase:', classError);
   }
 
   return { ok: true, saleId: saleResult.id, saleNumber };

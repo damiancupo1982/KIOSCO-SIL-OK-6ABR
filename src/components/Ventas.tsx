@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase, Product, SaleItem, Shift, CashTransaction } from '../lib/supabase';
+import { supabase, Product, Professor, SaleItem, Shift, CashTransaction } from '../lib/supabase';
 import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
 import { EMPTY_PAYMENTS, LOTE_INCORRECTO_MSG, PaymentAmounts, isInvalidCcLot, preparePayments, processSale } from '../lib/processSale';
 import PaymentFields from './PaymentFields';
@@ -10,6 +10,7 @@ interface VentasProps {
 
 export default function Ventas({ shift }: VentasProps) {
   const [products, setProducts] = useState<Product[]>([]);
+  const [professors, setProfessors] = useState<Professor[]>([]);
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [search, setSearch] = useState('');
 
@@ -27,6 +28,7 @@ export default function Ventas({ shift }: VentasProps) {
 
   useEffect(() => {
     loadProducts();
+    loadProfessors();
   }, []);
 
   useEffect(() => {
@@ -79,7 +81,12 @@ export default function Ventas({ shift }: VentasProps) {
       .eq('active', true)
       .gt('stock', 0);
 
-    setProducts(data || []);
+    setProducts((data || []) as Product[]);
+  };
+
+  const loadProfessors = async () => {
+    const { data } = await supabase.from('professors').select('*').eq('active', true).order('name');
+    setProfessors((data || []) as Professor[]);
   };
 
   const checkOldDebts = async () => {
@@ -108,7 +115,7 @@ export default function Ventas({ shift }: VentasProps) {
   };
 
   const addToCart = (product: Product) => {
-    const existing = cart.find((i) => i.product_id === product.id);
+    const existing = product.requires_professor ? undefined : cart.find((i) => i.product_id === product.id);
     if (existing) {
       if (existing.quantity >= product.stock) {
         return alert('Stock insuficiente');
@@ -149,6 +156,15 @@ export default function Ventas({ shift }: VentasProps) {
           : i
       )
     );
+  };
+
+  const setItemProfessor = (productId: string, professorId: string) => {
+    const professor = professors.find((item) => item.id === professorId);
+    setCart((current) => current.map((item) => item.product_id === productId ? {
+      ...item,
+      professor_id: professorId || null,
+      professor_name: professor?.name || null,
+    } : item));
   };
 
   const updatePrice = (id: string, newPrice: number) => {
@@ -409,6 +425,19 @@ export default function Ventas({ shift }: VentasProps) {
                       />
                     </div>
                   </div>
+                  {products.find((product) => product.id === item.product_id)?.requires_professor && (
+                    <select
+                      value={item.professor_id || ''}
+                      onChange={(e) => setItemProfessor(item.product_id, e.target.value)}
+                      className="w-full mb-2 px-2 py-1.5 text-xs border-2 border-amber-200 rounded-lg bg-amber-50 text-slate-700"
+                    >
+                      <option value="">Seleccionar profesor *</option>
+                      {professors.map((professor) => <option key={professor.id} value={professor.id}>{professor.name}</option>)}
+                    </select>
+                  )}
+                  {products.find((product) => product.id === item.product_id)?.requires_professor && !item.professor_id && (
+                    <p className="text-xs text-amber-700 font-semibold mb-2">Seleccioná el profesor para poder confirmar la venta.</p>
+                  )}
                   <div className="flex justify-end">
                     <span className="font-bold text-emerald-600 text-base">
                       ${item.subtotal.toFixed(2)}

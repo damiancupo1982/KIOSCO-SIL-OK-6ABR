@@ -68,6 +68,7 @@ export default function OpenCourtModal({ court, reservation, session, userName, 
       p_court: court,
       p_reservation_id: reservation?.id ?? null,
       ...titularFields,
+      p_professor_id: reservation?.professor_id ?? null,
       p_user: userName,
     });
     setSaving(false);

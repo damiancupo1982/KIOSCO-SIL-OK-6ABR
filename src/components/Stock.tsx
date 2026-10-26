@@ -26,6 +26,7 @@ export default function Stock() {
     stock: '',
     min_stock: ''
   });
+  const [requiresProfessor, setRequiresProfessor] = useState(false);
 
   const [categoryOption, setCategoryOption] = useState<string>('');
   const [customCategory, setCustomCategory] = useState<string>('');
@@ -151,6 +152,7 @@ export default function Stock() {
         price: parseFloat(formData.price) || 0,
         cost: parseFloat(formData.cost) || 0,
         min_stock: parseInt(formData.min_stock) || 0,
+        requires_professor: requiresProfessor,
         updated_at: new Date().toISOString()
       };
 
@@ -169,6 +171,7 @@ export default function Stock() {
         stock: 0,
         min_stock: parseInt(formData.min_stock) || 0,
         active: true,
+        requires_professor: requiresProfessor,
         updated_at: new Date().toISOString()
       };
 
@@ -215,6 +218,7 @@ export default function Stock() {
       stock: product.stock.toString(),
       min_stock: product.min_stock.toString()
     });
+    setRequiresProfessor(product.requires_professor ?? false);
     setCategoryOption(option);
     setCustomCategory(custom);
     setShowModal(true);
@@ -234,6 +238,7 @@ export default function Stock() {
       stock: '',
       min_stock: ''
     });
+    setRequiresProfessor(false);
     setCategoryOption('');
     setCustomCategory('');
     setShowModal(true);
@@ -617,6 +622,26 @@ export default function Stock() {
                   />
                 </div>
               </div>
+
+              <label className="flex items-center gap-3 cursor-pointer pt-2">
+                <button
+                  type="button"
+                  onClick={() => setRequiresProfessor(!requiresProfessor)}
+                  className={`relative w-12 h-6 rounded-full transition-colors ${
+                    requiresProfessor ? 'bg-amber-500' : 'bg-slate-300'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
+                      requiresProfessor ? 'translate-x-6' : ''
+                    }`}
+                  />
+                </button>
+                <div>
+                  <span className="text-sm font-semibold text-slate-700">Requiere profesor</span>
+                  <p className="text-xs text-slate-400">Activalo para productos de clases que generan comisión.</p>
+                </div>
+              </label>
 
               <div className="flex gap-3 pt-4">
                 <button

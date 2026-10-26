@@ -16,6 +16,7 @@ export interface Product {
   stock: number;
   min_stock: number;
   active: boolean;
+  requires_professor: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +44,8 @@ export interface SaleItem {
   quantity: number;
   price: number;
   subtotal: number;
+  professor_id?: string | null;
+  professor_name?: string | null;
 }
 
 export interface CashTransaction {
@@ -135,6 +138,7 @@ export interface CourtReservation {
   event_group: string;
   title: string;
   professor: string;
+  professor_id: string | null;
   student: string;
   titular_lot: string;
   titular_name: string;
@@ -165,6 +169,70 @@ export interface CourtSession {
   guest_charge_manual: boolean;
   is_late_entry: boolean;
   planned_end: string | null;
+  event_type: 'reserva' | 'clase' | 'torneo' | 'mantenimiento';
+  professor_id: string | null;
+  professor_name: string;
+}
+
+export interface Professor {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  commission_rate: number;
+  active: boolean;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProfessorClass {
+  id: string;
+  professor_id: string;
+  professor_name: string;
+  product_id: string | null;
+  product_name: string;
+  sale_id: string | null;
+  sale_number: string;
+  court_session_id: string | null;
+  court: number | null;
+  class_date: string;
+  class_time: string | null;
+  quantity: number;
+  gross_amount: number;
+  collected_amount: number;
+  commission_rate: number;
+  commission_amount: number;
+  collection_status: 'pendiente' | 'pagada' | 'anulada';
+  settlement_status: 'pendiente' | 'liquidada' | 'anulada';
+  settlement_id: string | null;
+  created_at: string;
+}
+
+export interface ProfessorSettlement {
+  id: string;
+  settlement_number: number;
+  professor_id: string;
+  professor_name: string;
+  period_from: string;
+  period_to: string;
+  total_gross: number;
+  total_commission: number;
+  total_paid: number;
+  status: 'pendiente_pago' | 'pagada_parcial' | 'pagada' | 'anulada';
+  created_by: string;
+  created_at: string;
+}
+
+export interface ProfessorSettlementPayment {
+  id: string;
+  settlement_id: string;
+  amount: number;
+  payment_date: string;
+  payment_method: 'efectivo' | 'transferencia';
+  notes: string;
+  user_name: string;
+  created_at: string;
 }
 
 export interface CourtSessionItem {
