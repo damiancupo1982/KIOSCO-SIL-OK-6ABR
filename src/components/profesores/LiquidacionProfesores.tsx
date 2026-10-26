@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase, Professor, ProfessorClass, ProfessorSettlement, ProfessorSettlementPayment } from '../../lib/supabase';
 import {
   GraduationCap, DollarSign, Percent, CheckCircle2, Loader2,
-  Wallet, FileText, ChevronDown, ChevronRight, X, Save, Filter,
+  Wallet, FileText, ChevronDown, ChevronRight, X, Save, Filter, Pencil, Trash2, ShieldCheck,
 } from 'lucide-react';
 
 const inputClass =
@@ -57,6 +57,19 @@ export default function LiquidacionProfesores({ userName, shiftId }: { userName:
 
   // Expanded settlement rows
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const [editingClass, setEditingClass] = useState<ProfessorClass | null>(null);
+  const [classAction, setClassAction] = useState<'edit' | 'delete' | null>(null);
+  const [superAdminKey, setSuperAdminKey] = useState('');
+  const [classActionError, setClassActionError] = useState('');
+  const [classActionSaving, setClassActionSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    professor_id: '',
+    class_date: '',
+    gross_amount: '',
+    collected_amount: '',
+    commission_rate: '',
+  });
 
   useEffect(() => {
     loadProfessors();
@@ -244,6 +257,66 @@ export default function LiquidacionProfesores({ userName, shiftId }: { userName:
     setPayError('');
   };
 
+  const openEditClass = (professorClass: ProfessorClass) => {
+    setEditingClass(professorClass);
+    setClassAction('edit');
+    setSuperAdminKey('');
+    setClassActionError('');
+    setEditForm({
+      professor_id: professorClass.professor_id,
+      class_date: professorClass.class_date,
+      gross_amount: String(professorClass.gross_amount),
+      collected_amount: String(professorClass.collected_amount),
+      commission_rate: String(professorClass.commission_rate),
+    });
+  };
+
+  const openDeleteClass = (professorClass: ProfessorClass) => {
+    setEditingClass(professorClass);
+    setClassAction('delete');
+    setSuperAdminKey('');
+    setClassActionError('');
+  };
+
+  const closeClassAction = () => {
+    if (classActionSaving) return;
+    setEditingClass(null);
+    setClassAction(null);
+    setSuperAdminKey('');
+    setClassActionError('');
+  };
+
+  const handleClassAction = async () => {
+    if (!editingClass || !classAction) return;
+    if (!superAdminKey.trim()) return setClassActionError('Ingresá la clave de superadministrador.');
+
+    setClassActionSaving(true);
+    setClassActionError('');
+    const result = classAction === 'edit'
+      ? await supabase.rpc('edit_professor_class', {
+          p_class_id: editingClass.id,
+          p_professor_id: editForm.professor_id,
+          p_class_date: editForm.class_date,
+          p_gross_amount: Number(editForm.gross_amount),
+          p_collected_amount: Number(editForm.collected_amount),
+          p_commission_rate: Number(editForm.commission_rate),
+          p_superadmin_key: superAdminKey,
+        })
+      : await supabase.rpc('delete_professor_class', {
+          p_class_id: editingClass.id,
+          p_superadmin_key: superAdminKey,
+        });
+    setClassActionSaving(false);
+
+    if (result.error) {
+      console.error('Error modificando clase:', result.error);
+      return setClassActionError('No se pudo completar la operación. Verificá la clave y que la clase siga pendiente.');
+    }
+
+    closeClassAction();
+    await loadClasses();
+  };
+
   const toggleExpand = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -389,6 +462,7 @@ export default function LiquidacionProfesores({ userName, shiftId }: { userName:
                       <th className="px-3 py-2 text-right">Comisión %</th>
                       <th className="px-3 py-2 text-right">Monto comisión</th>
                       <th className="px-3 py-2 text-center">Cobro</th>
+                      <th className="px-3 py-2 text-center">Acciones</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -419,6 +493,24 @@ export default function LiquidacionProfesores({ userName, shiftId }: { userName:
                           </td>
                           <td className="px-3 py-2.5 text-right font-bold text-slate-800">${fmtPesos(getCommissionAmount(c))}</td>
                           <td className="px-3 py-2.5 text-center">{collectionBadge(c.collection_status)}</td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => openEditClass(c)}
+                                className="p-2 rounded-lg text-sky-600 hover:bg-sky-50 transition-colors"
+                                title="Editar clase"
+                              >
+                                <Pencil size={16} />
+                              </button>
+                              <button
+                                onClick={() => openDeleteClass(c)}
+                                className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                                title="Eliminar clase"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       );
                     })}
@@ -555,6 +647,84 @@ export default function LiquidacionProfesores({ userName, shiftId }: { userName:
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* CLASS ACTION MODAL */}
+      {editingClass && classAction && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-xl ${classAction === 'edit' ? 'bg-sky-100 text-sky-700' : 'bg-red-100 text-red-700'}`}>
+                  {classAction === 'edit' ? <Pencil size={20} /> : <Trash2 size={20} />}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">{classAction === 'edit' ? 'Editar clase' : 'Eliminar clase'}</h3>
+                  <p className="text-xs text-slate-500">{editingClass.product_name} · {editingClass.professor_name}</p>
+                </div>
+              </div>
+              <button onClick={closeClassAction} disabled={classActionSaving} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {classAction === 'edit' ? (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>Profesor</label>
+                      <select value={editForm.professor_id} onChange={(e) => setEditForm({ ...editForm, professor_id: e.target.value })} className={inputClass}>
+                        {professors.filter((p) => p.active).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Fecha</label>
+                      <input type="date" value={editForm.class_date} onChange={(e) => setEditForm({ ...editForm, class_date: e.target.value })} className={inputClass} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className={labelClass}>Bruto</label>
+                      <input type="number" min="0" step="0.01" value={editForm.gross_amount} onChange={(e) => setEditForm({ ...editForm, gross_amount: e.target.value })} className={inputClass} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Cobrado</label>
+                      <input type="number" min="0" step="0.01" value={editForm.collected_amount} onChange={(e) => setEditForm({ ...editForm, collected_amount: e.target.value })} className={inputClass} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Comisión %</label>
+                      <input type="number" min="0" max="100" step="0.01" value={editForm.commission_rate} onChange={(e) => setEditForm({ ...editForm, commission_rate: e.target.value })} className={inputClass} />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-800">
+                  Se eliminará la clase pendiente <strong>{editingClass.product_name}</strong> y dejará de aparecer para liquidar. La venta original no se elimina.
+                </div>
+              )}
+
+              <div>
+                <label className={labelClass}><ShieldCheck size={14} className="inline mr-1" />Clave de superadministrador</label>
+                <input type="password" value={superAdminKey} onChange={(e) => setSuperAdminKey(e.target.value)} className={inputClass} autoFocus />
+              </div>
+
+              {classActionError && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm font-medium">{classActionError}</div>}
+
+              <div className="flex gap-3">
+                <button onClick={closeClassAction} disabled={classActionSaving} className="flex-1 px-6 py-3 border-2 border-slate-300 text-slate-700 font-semibold rounded-xl hover:bg-slate-50">Cancelar</button>
+                <button
+                  onClick={handleClassAction}
+                  disabled={classActionSaving}
+                  className={`flex-1 px-6 py-3 text-white font-semibold rounded-xl shadow-lg transition-all disabled:bg-slate-300 flex items-center justify-center gap-2 ${classAction === 'edit' ? 'bg-sky-600 hover:bg-sky-700' : 'bg-red-600 hover:bg-red-700'}`}
+                >
+                  {classActionSaving ? <Loader2 size={18} className="animate-spin" /> : classAction === 'edit' ? <Save size={18} /> : <Trash2 size={18} />}
+                  {classAction === 'edit' ? 'Guardar cambios' : 'Eliminar clase'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
