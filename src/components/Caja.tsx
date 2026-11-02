@@ -1,10 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, Shift, CashTransaction, Sale } from '../lib/supabase';
 import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, Table, Share2, Printer, Eraser } from 'lucide-react';
-import ZeroBalanceModal, { MethodBalances } from './ZeroBalanceModal';
-
-const BALANCE_METHODS = ['transferencia', 'qr', 'expensas'];
-const PAGE_SIZE = 1000;
+import ZeroBalanceModal from './ZeroBalanceModal';
+import { MethodBalances, fetchAllRows, fetchMethodBalances } from '../lib/cashBalances';
 
 interface CajaProps {
   shift: Shift | null;
@@ -71,26 +69,8 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
   };
 
   const loadMethodBalances = async () => {
-    const rows: { type: string; payment_method: string; amount: number }[] = [];
-    for (let from = 0; ; from += PAGE_SIZE) {
-      const { data, error } = await supabase
-        .from('cash_transactions')
-        .select('type, payment_method, amount')
-        .in('payment_method', BALANCE_METHODS)
-        .order('id')
-        .range(from, from + PAGE_SIZE - 1);
-      if (error || !data) return;
-      rows.push(...data);
-      if (data.length < PAGE_SIZE) break;
-    }
-
-    const balances: MethodBalances = { transferencia: 0, qr: 0, expensas: 0 };
-    rows.forEach((row) => {
-      const method = row.payment_method as keyof MethodBalances;
-      const amount = Number(row.amount) || 0;
-      balances[method] += row.type === 'income' ? amount : -amount;
-    });
-    setMethodBalances(balances);
+    const balances = await fetchMethodBalances();
+    if (balances) setMethodBalances(balances);
   };
 
   const reloadAllBalances = () => {
@@ -144,8 +124,8 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
         .lte('created_at', toIso);
     }
 
-    const { data } = await query;
-    setTransactions(data || []);
+    const rows = await fetchAllRows<CashTransaction>((from, to) => query.range(from, to));
+    setTransactions(rows ?? []);
   };
 
   const formatDateTime = (iso: string) => {

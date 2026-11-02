@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { MethodBalances } from '../lib/cashBalances';
 import { Eraser, Lock, X } from 'lucide-react';
 
-type ZeroMethod = 'transferencia' | 'qr' | 'expensas';
-
-export type MethodBalances = Record<ZeroMethod, number>;
+type ZeroMethod = keyof MethodBalances;
 
 const METHOD_OPTIONS: { value: ZeroMethod; label: string }[] = [
   { value: 'transferencia', label: 'Transferencias' },

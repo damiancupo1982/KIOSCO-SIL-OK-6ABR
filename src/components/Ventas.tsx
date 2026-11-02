@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase, Product, Professor, SaleItem, Shift, CashTransaction } from '../lib/supabase';
+import { fetchMethodBalances } from '../lib/cashBalances';
 import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
 import { EMPTY_PAYMENTS, LOTE_INCORRECTO_MSG, PaymentAmounts, isInvalidCcLot, preparePayments, processSale } from '../lib/processSale';
 import PaymentFields from './PaymentFields';
@@ -53,10 +54,11 @@ export default function Ventas({ shift }: VentasProps) {
     const now = new Date();
     const ARG_OFFSET = 3;
     const startOfMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, ARG_OFFSET, 0, 0, 0)).toISOString();
-    const { data } = await supabase
-      .from('cash_transactions')
-      .select('*')
-      .gte('created_at', startOfMonth);
+    const [{ data }, saldos] = await Promise.all([
+      supabase.from('cash_transactions').select('*').gte('created_at', startOfMonth),
+      fetchMethodBalances(),
+    ]);
+    if (!saldos) return;
     const txs = (data || []) as CashTransaction[];
     const calc = (method: string) => {
       const inc = txs.filter(t => t.type === 'income' && t.payment_method === method).reduce((s, t) => s + Number(t.amount), 0);
@@ -67,9 +69,9 @@ export default function Ventas({ shift }: VentasProps) {
     const ccPagos = txs.filter(t => t.type === 'income' && t.category === 'cuenta_corriente').reduce((s, t) => s + Number(t.amount), 0);
     setMonthlyBalances({
       cash: calc('efectivo'),
-      transfer: calc('transferencia'),
-      qr: calc('qr'),
-      expensas: calc('expensas'),
+      transfer: saldos.transferencia,
+      qr: saldos.qr,
+      expensas: saldos.expensas,
       cuentaCorriente: ccDeuda - ccPagos,
     });
   };
@@ -279,11 +281,11 @@ export default function Ventas({ shift }: VentasProps) {
       )}
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-5">
       {[
-        { label: 'Efectivo', value: monthlyBalances.cash, icon: Banknote, color: 'emerald' },
-        { label: 'Transferencias', value: monthlyBalances.transfer, icon: ArrowRightLeft, color: 'blue' },
-        { label: 'QR', value: monthlyBalances.qr, icon: QrCode, color: 'violet' },
-        { label: 'Expensas', value: monthlyBalances.expensas, icon: Building2, color: 'slate' },
-        { label: 'Cta. Corriente', value: monthlyBalances.cuentaCorriente, icon: Wallet, color: 'amber' },
+        { label: 'Efectivo', value: monthlyBalances.cash, icon: Banknote, color: 'emerald', basis: 'Mes en curso' },
+        { label: 'Transferencias', value: monthlyBalances.transfer, icon: ArrowRightLeft, color: 'blue', basis: 'Saldo actual' },
+        { label: 'QR', value: monthlyBalances.qr, icon: QrCode, color: 'violet', basis: 'Saldo actual' },
+        { label: 'Expensas', value: monthlyBalances.expensas, icon: Building2, color: 'slate', basis: 'Saldo actual' },
+        { label: 'Cta. Corriente', value: monthlyBalances.cuentaCorriente, icon: Wallet, color: 'amber', basis: 'Mes en curso' },
       ].map(card => (
         <div key={card.label} className={`bg-white rounded-xl p-3 shadow border ${
           card.color === 'amber' ? 'border-amber-200' : 'border-slate-200'
@@ -299,7 +301,7 @@ export default function Ventas({ shift }: VentasProps) {
           }`}>
             ${card.value.toLocaleString('es-AR', { minimumFractionDigits: 2 })}
           </p>
-          <p className="text-[10px] text-slate-400">Mes en curso</p>
+          <p className="text-[10px] text-slate-400">{card.basis}</p>
         </div>
       ))}
     </div>
