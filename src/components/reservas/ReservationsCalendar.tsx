@@ -3,6 +3,7 @@ import { CalendarPlus, ChevronLeft, ChevronRight, GraduationCap, Lock, Trophy, W
 import { supabase, CourtReservation, CourtSession } from '../../lib/supabase';
 import AgendaTimeline, { AgendaBlock, AgendaColumn } from './AgendaTimeline';
 import TurnoDetailModal from './TurnoDetailModal';
+import { reservationToRecord, sessionToRecord } from './bookingControl';
 import {
   COURTS,
   EVENT_META,
@@ -64,6 +65,7 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
       headline: eventSummary(e) || fallback,
       detail: e.notes,
       reservation: e,
+      booking: reservationToRecord(e) ?? undefined,
       openedSession: openingByReservation.get(e.id) ?? null,
     });
   }
@@ -95,6 +97,7 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
           : s.is_late_entry
             ? 'Reserva jugada pendiente de cerrar'
             : `Turno #${s.session_number} en curso`,
+      booking: sessionToRecord(s) ?? undefined,
       sessionId: s.id,
     });
   }

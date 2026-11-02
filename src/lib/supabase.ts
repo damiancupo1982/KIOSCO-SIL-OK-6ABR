@@ -190,6 +190,10 @@ export interface CourtSession {
   event_type: 'reserva' | 'clase' | 'torneo' | 'mantenimiento';
   professor_id: string | null;
   professor_name: string;
+  created_at: string;
+  booking_scheduled_at: string | null;
+  booking_status: 'a_tiempo' | 'fuera_de_tiempo' | null;
+  booking_delay_minutes: number | null;
 }
 
 export interface Professor {

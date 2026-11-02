@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CalendarCheck, Link2, Loader2, X } from 'lucide-react';
 import { supabase, CourtPlayer, CourtReservation } from '../../lib/supabase';
 import LotPersonInput from './LotPersonInput';
+import LateBookingWarning from './LateBookingWarning';
 import { addDaysISO, COURTS, formatTime, hhmmOf, minutesOf, rpcErrorMessage, todayISO } from './reservasUtils';
 
 interface PlayedTurnoModalProps {
@@ -26,6 +27,7 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
   const [players, setPlayers] = useState<CourtPlayer[]>([emptyPlayer(), emptyPlayer(), emptyPlayer(), emptyPlayer()]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showLateWarning, setShowLateWarning] = useState(false);
 
   useEffect(() => {
     setLinked(null);
@@ -67,7 +69,7 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
   const updatePlayer = (index: number, player: CourtPlayer) =>
     setPlayers((prev) => prev.map((p, i) => (i === index ? player : p)));
 
-  const handleSave = async () => {
+  const handleSave = async (lateAcknowledged = false) => {
     setError('');
     if (!date || !start || !end) return setError('Complete fecha, hora de inicio y hora de fin.');
     if (minutesOf(end) <= minutesOf(start)) return setError('La hora de fin debe ser posterior a la hora de inicio.');
@@ -77,6 +79,7 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
     const incomplete = players.findIndex((p) => p.lot.trim() && !p.name.trim());
     if (incomplete >= 0) return setError(`Complete el nombre del Jugador ${incomplete + 1} o borre su lote.`);
 
+    if (!lateAcknowledged) return setShowLateWarning(true);
     setSaving(true);
     const { data, error: rpcError } = await supabase.rpc('open_played_court_session', {
       p_court: court,
@@ -193,7 +196,7 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
         <div className="px-6 py-4 border-t border-slate-100 space-y-3">
           {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm font-medium">{error}</div>}
           <button
-            onClick={handleSave}
+            onClick={() => handleSave()}
             disabled={saving}
             className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-stone-700 hover:bg-stone-800 disabled:bg-slate-300 text-white font-bold shadow-lg transition-colors"
           >
@@ -202,6 +205,16 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
           </button>
         </div>
       </div>
+
+      {showLateWarning && (
+        <LateBookingWarning
+          onConfirm={() => {
+            setShowLateWarning(false);
+            handleSave(true);
+          }}
+          onCancel={() => setShowLateWarning(false)}
+        />
+      )}
     </div>
   );
 }

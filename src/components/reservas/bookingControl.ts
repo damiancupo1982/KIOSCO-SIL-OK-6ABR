@@ -1,5 +1,14 @@
 import { supabase, CourtReservation, CourtReservationHistory, CourtSession } from '../../lib/supabase';
-import { addDaysISO, formatClock, formatDateTime, startOfWeekISO, todayISO } from './reservasUtils';
+import {
+  addDaysISO,
+  eventSummary,
+  formatClock,
+  formatDateTime,
+  formatTime,
+  localDateOf,
+  startOfWeekISO,
+  todayISO,
+} from './reservasUtils';
 
 export type PeriodKey = 'hoy' | 'ayer' | 'semana' | 'mes' | 'mes_anterior' | 'rango';
 
@@ -48,10 +57,66 @@ export const resolveRange = (key: PeriodKey, custom: DateRange): DateRange =>
 
 export const formatCreated = (ts: string) => `${formatDateTime(ts)} ${formatClock(ts)}`;
 
-export const formatScheduledAt = (ts: string | null, fallbackDate: string, fallbackTime: string) =>
-  ts ? `${formatDateTime(ts)} ${formatClock(ts)}` : `${fallbackDate} ${fallbackTime.slice(0, 5)}`;
+export interface BookingRecord {
+  id: string;
+  source: 'reserva' | 'jugado';
+  groupKey: string;
+  court: number;
+  label: string;
+  createdAt: string;
+  createdBy: string;
+  cancelled: boolean;
+  bookingStatus: 'a_tiempo' | 'fuera_de_tiempo';
+  delayMinutes: number;
+  scheduledAt: string | null;
+  scheduledFallback: string;
+  currentSchedule: string;
+}
 
-export const fetchBookingRows = async (range: DateRange): Promise<CourtReservation[]> => {
+export const scheduledText = (record: BookingRecord) =>
+  record.scheduledAt ? formatCreated(record.scheduledAt) : record.scheduledFallback;
+
+export const reservationToRecord = (r: CourtReservation): BookingRecord | null => {
+  if (!r.booking_status) return null;
+  return {
+    id: r.id,
+    source: 'reserva',
+    groupKey: r.event_group,
+    court: r.court,
+    label: eventSummary(r) || r.event_type,
+    createdAt: r.created_at,
+    createdBy: r.created_by,
+    cancelled: r.status === 'cancelada',
+    bookingStatus: r.booking_status,
+    delayMinutes: r.booking_delay_minutes ?? 0,
+    scheduledAt: r.booking_scheduled_at,
+    scheduledFallback: `${r.reservation_date} ${formatTime(r.start_time)}`,
+    currentSchedule: `${r.reservation_date} ${formatTime(r.start_time)}-${formatTime(r.end_time)}`,
+  };
+};
+
+export const sessionToRecord = (s: CourtSession): BookingRecord | null => {
+  if (!s.booking_status) return null;
+  const date = localDateOf(s.opened_at);
+  const start = formatClock(s.opened_at);
+  return {
+    id: s.id,
+    source: 'jugado',
+    groupKey: s.id,
+    court: s.court,
+    label: `${s.titular_name}${s.titular_lot ? ` · Lote ${s.titular_lot}` : ''}`,
+    createdAt: s.created_at,
+    createdBy: s.opened_by,
+    cancelled: s.status === 'cancelada',
+    bookingStatus: s.booking_status,
+    delayMinutes: s.booking_delay_minutes ?? 0,
+    scheduledAt: s.booking_scheduled_at,
+    scheduledFallback: `${date} ${start}`,
+    currentSchedule: `${date} ${start}-${s.planned_end ? formatClock(s.planned_end) : ''}`,
+  };
+};
+
+const fetchReservationRows = async (range: DateRange): Promise<CourtReservation[]> => {
   const { data, error } = await supabase
     .from('court_reservations')
     .select('*')
@@ -62,6 +127,27 @@ export const fetchBookingRows = async (range: DateRange): Promise<CourtReservati
     .order('created_at', { ascending: false });
   if (error) throw new Error(error.message);
   return (data ?? []) as CourtReservation[];
+};
+
+const fetchPlayedRows = async (range: DateRange): Promise<CourtSession[]> => {
+  const { data, error } = await supabase
+    .from('court_sessions')
+    .select('*')
+    .gte('created_at', dayStart(range.from))
+    .lt('created_at', nextDayStart(range.to))
+    .not('booking_status', 'is', null)
+    .order('created_at', { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []) as CourtSession[];
+};
+
+export const fetchBookingRecords = async (range: DateRange): Promise<BookingRecord[]> => {
+  const [reservations, played] = await Promise.all([fetchReservationRows(range), fetchPlayedRows(range)]);
+  const records = [
+    ...reservations.map(reservationToRecord),
+    ...played.map(sessionToRecord),
+  ].filter((r): r is BookingRecord => r !== null);
+  return records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 };
 
 export const fetchOpeningsInRange = async (range: DateRange): Promise<CourtSession[]> => {
@@ -92,11 +178,11 @@ export const fetchScheduleChanges = async (reservationIds: string[]): Promise<Co
   return (data ?? []) as CourtReservationHistory[];
 };
 
-const countableRows = (rows: CourtReservation[]) => {
+const countableRecords = (records: BookingRecord[]) => {
   const seen = new Set<string>();
-  return rows.filter((r) => {
-    if (r.status === 'cancelada' || seen.has(r.event_group)) return false;
-    seen.add(r.event_group);
+  return records.filter((r) => {
+    if (r.cancelled || seen.has(r.groupKey)) return false;
+    seen.add(r.groupKey);
     return true;
   });
 };
@@ -120,20 +206,20 @@ export interface BookingSummary {
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-export const summarizeBookings = (rows: CourtReservation[]): BookingSummary => {
-  const groups = countableRows(rows);
+export const summarizeBookings = (records: BookingRecord[]): BookingSummary => {
+  const groups = countableRecords(records);
   const total = groups.length;
-  const late = groups.filter((r) => r.booking_status === 'fuera_de_tiempo').length;
+  const late = groups.filter((r) => r.bookingStatus === 'fuera_de_tiempo').length;
   const latePct = total ? round1((late / total) * 100) : 0;
-  const byEmployee = new Map<string, CourtReservation[]>();
+  const byEmployee = new Map<string, BookingRecord[]>();
   for (const r of groups) {
-    const name = r.created_by.trim() || NO_EMPLOYEE_LABEL;
+    const name = r.createdBy.trim() || NO_EMPLOYEE_LABEL;
     byEmployee.set(name, [...(byEmployee.get(name) ?? []), r]);
   }
   const employees: EmployeeStat[] = [...byEmployee.entries()]
     .map(([name, list]) => {
-      const lateList = list.filter((r) => r.booking_status === 'fuera_de_tiempo');
-      const delaySum = lateList.reduce((s, r) => s + (r.booking_delay_minutes ?? 0), 0);
+      const lateList = list.filter((r) => r.bookingStatus === 'fuera_de_tiempo');
+      const delaySum = lateList.reduce((s, r) => s + r.delayMinutes, 0);
       return {
         name,
         total: list.length,

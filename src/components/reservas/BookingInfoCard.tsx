@@ -1,11 +1,11 @@
-import { CourtReservation, CourtSession } from '../../lib/supabase';
-import { formatCreated, formatScheduledAt, NO_EMPLOYEE_LABEL } from './bookingControl';
-import { formatClock, formatDateTime, formatTime } from './reservasUtils';
+import { BookingRecord, formatCreated, NO_EMPLOYEE_LABEL, scheduledText } from './bookingControl';
+import { formatClock, formatDateTime } from './reservasUtils';
+import { CourtSession } from '../../lib/supabase';
 
 export type OpeningRecord = Pick<CourtSession, 'opened_at' | 'opened_by'> | null;
 
 interface BookingInfoCardProps {
-  reservation: CourtReservation;
+  record: BookingRecord;
   opened?: OpeningRecord;
 }
 
@@ -16,9 +16,8 @@ const Row = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
-export default function BookingInfoCard({ reservation, opened }: BookingInfoCardProps) {
-  const late = reservation.booking_status === 'fuera_de_tiempo';
-  const delay = reservation.booking_delay_minutes ?? 0;
+export default function BookingInfoCard({ record, opened }: BookingInfoCardProps) {
+  const late = record.bookingStatus === 'fuera_de_tiempo';
   const openingText =
     opened === undefined
       ? null
@@ -36,14 +35,11 @@ export default function BookingInfoCard({ reservation, opened }: BookingInfoCard
         {late ? 'FUERA DE TIEMPO' : 'A TIEMPO'}
       </span>
       <dl>
-        <Row
-          label="Horario previsto al cargar"
-          value={formatScheduledAt(reservation.booking_scheduled_at, reservation.reservation_date, reservation.start_time)}
-        />
-        <Row label="Carga real" value={formatCreated(reservation.created_at)} />
-        <Row label="Demora" value={late ? `${delay} min` : 'Sin demora'} />
-        <Row label="Cargada por" value={reservation.created_by.trim() || NO_EMPLOYEE_LABEL} />
-        <Row label="Horario actual" value={`${formatTime(reservation.start_time)} - ${formatTime(reservation.end_time)}`} />
+        <Row label="Horario previsto al cargar" value={scheduledText(record)} />
+        <Row label="Carga real" value={formatCreated(record.createdAt)} />
+        <Row label="Demora" value={late ? `${record.delayMinutes} min` : 'Sin demora'} />
+        <Row label="Cargada por" value={record.createdBy.trim() || NO_EMPLOYEE_LABEL} />
+        <Row label="Horario actual" value={record.currentSchedule} />
         {openingText !== null && <Row label="Apertura de cancha" value={openingText} />}
       </dl>
     </div>

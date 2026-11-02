@@ -3,6 +3,8 @@ import { CalendarPlus, GraduationCap, Loader2, PlayCircle, Save, Trophy, Wrench,
 import { supabase, CourtPlayer, CourtReservation, Professor } from '../../lib/supabase';
 import LotPersonInput from './LotPersonInput';
 import BookingInfoCard, { OpeningRecord } from './BookingInfoCard';
+import { reservationToRecord } from './bookingControl';
+import LateBookingWarning from './LateBookingWarning';
 import {
   COURTS,
   EVENT_META,
@@ -78,6 +80,7 @@ export default function EventModal({
   const [error, setError] = useState('');
   const [showLateWarning, setShowLateWarning] = useState(false);
   const [opened, setOpened] = useState<OpeningRecord | undefined>(undefined);
+  const eventRecord = event ? reservationToRecord(event) : null;
 
   const startAlreadyPassed = (() => {
     if (date < todayISO()) return true;
@@ -182,9 +185,9 @@ export default function EventModal({
         </div>
 
         <div className="p-6 space-y-4 overflow-y-auto">
-          {event?.booking_status && (
+          {eventRecord && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <BookingInfoCard reservation={event} opened={opened} />
+              <BookingInfoCard record={eventRecord} opened={opened} />
             </div>
           )}
           <div>
@@ -319,31 +322,13 @@ export default function EventModal({
       </div>
 
       {showLateWarning && (
-        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 border-t-4 border-orange-500">
-            <h4 className="text-lg font-bold text-slate-800">Reserva fuera de tiempo</h4>
-            <p className="text-sm text-slate-600 leading-relaxed">
-              RECORDA QUE ES MUY IMPORTANTE QUE LAS RESERVAS SE HAGAN EN EL MOMENTO, LA CARGA TARDIA PUEDE TENER ERRORES Y OMISIONES.
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                onClick={() => {
-                  setShowLateWarning(false);
-                  handleSave(true);
-                }}
-                className="w-full py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold transition-colors"
-              >
-                ENTENDIDO — REGISTRAR RESERVA FUERA DE TIEMPO
-              </button>
-              <button
-                onClick={() => setShowLateWarning(false)}
-                className="w-full py-3 rounded-xl border-2 border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold transition-colors"
-              >
-                Volver y corregir
-              </button>
-            </div>
-          </div>
-        </div>
+        <LateBookingWarning
+          onConfirm={() => {
+            setShowLateWarning(false);
+            handleSave(true);
+          }}
+          onCancel={() => setShowLateWarning(false)}
+        />
       )}
     </div>
   );

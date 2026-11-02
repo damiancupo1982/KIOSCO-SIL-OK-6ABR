@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { CourtReservation } from '../../lib/supabase';
 import BookingInfoCard, { OpeningRecord } from './BookingInfoCard';
+import { BookingRecord } from './bookingControl';
 import { EVENT_META, EventType, hhmmOf, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
 
 export interface AgendaBlock {
@@ -14,6 +15,7 @@ export interface AgendaBlock {
   headline: string;
   detail: string;
   reservation?: CourtReservation;
+  booking?: BookingRecord;
   openedSession?: OpeningRecord;
   sessionId?: string;
 }
@@ -121,16 +123,16 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
                         onBlockClick(b);
                       }}
                       onMouseEnter={(e) => {
-                        if (b.reservation?.booking_status) setHovered({ block: b, rect: e.currentTarget.getBoundingClientRect() });
+                        if (b.booking) setHovered({ block: b, rect: e.currentTarget.getBoundingClientRect() });
                       }}
                       onMouseLeave={() => setHovered(null)}
                       title={`${hhmmOf(b.startMin)} - ${hhmmOf(b.endMin)} ${meta.label}\n${b.headline}${b.detail ? `\n${b.detail}` : ''}`}
                       className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all cursor-pointer hover:shadow-md hover:z-10 ${meta.block} ${
-                        b.reservation?.booking_status === 'fuera_de_tiempo' ? 'ring-2 ring-orange-400 ring-inset' : ''
+                        b.booking?.bookingStatus === 'fuera_de_tiempo' ? 'ring-2 ring-orange-400 ring-inset' : ''
                       }`}
                       style={{ top: top(b.startMin) + 1, height: blockHeight - 2 }}
                     >
-                      {b.reservation?.booking_status === 'fuera_de_tiempo' && (
+                      {b.booking?.bookingStatus === 'fuera_de_tiempo' && (
                         <span className="absolute right-1 top-1 rounded bg-orange-600 px-1 py-px text-[9px] font-black tracking-wide text-white shadow-sm">
                           FUERA DE TIEMPO
                         </span>
@@ -173,7 +175,7 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
                 : hovered.rect.right + 8,
           }}
         >
-          <BookingInfoCard reservation={hovered.block.reservation!} opened={hovered.block.openedSession} />
+          <BookingInfoCard record={hovered.block.booking!} opened={hovered.block.openedSession} />
         </div>
       )}
     </div>

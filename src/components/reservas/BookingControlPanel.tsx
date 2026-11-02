@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CourtReservation, CourtSession } from '../../lib/supabase';
+import { CourtSession } from '../../lib/supabase';
 import BookingPeriodPicker from './BookingPeriodPicker';
 import {
+  BookingRecord,
   DateRange,
-  fetchBookingRows,
+  fetchBookingRecords,
   fetchOpeningsInRange,
   NO_EMPLOYEE_LABEL,
   PeriodKey,
@@ -19,7 +20,7 @@ interface BookingControlPanelProps {
 export default function BookingControlPanel({ refreshKey }: BookingControlPanelProps) {
   const [period, setPeriod] = useState<PeriodKey>('mes');
   const [custom, setCustom] = useState<DateRange>({ from: todayISO(), to: todayISO() });
-  const [rows, setRows] = useState<CourtReservation[]>([]);
+  const [rows, setRows] = useState<BookingRecord[]>([]);
   const [openings, setOpenings] = useState<CourtSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -36,10 +37,10 @@ export default function BookingControlPanel({ refreshKey }: BookingControlPanelP
     }
     let cancelled = false;
     setLoading(true);
-    Promise.all([fetchBookingRows({ from, to }), fetchOpeningsInRange({ from, to })])
-      .then(([reservationRows, openingRows]) => {
+    Promise.all([fetchBookingRecords({ from, to }), fetchOpeningsInRange({ from, to })])
+      .then(([records, openingRows]) => {
         if (cancelled) return;
-        setRows(reservationRows);
+        setRows(records);
         setOpenings(openingRows);
         setError('');
       })

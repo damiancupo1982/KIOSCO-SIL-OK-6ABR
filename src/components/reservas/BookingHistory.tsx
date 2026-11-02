@@ -1,20 +1,21 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Download } from 'lucide-react';
-import { CourtReservation, CourtReservationHistory, CourtSession } from '../../lib/supabase';
+import { CourtReservationHistory, CourtSession } from '../../lib/supabase';
 import BookingPeriodPicker from './BookingPeriodPicker';
 import {
+  BookingRecord,
   DateRange,
   downloadCsv,
-  fetchBookingRows,
+  fetchBookingRecords,
   fetchOpenings,
   fetchScheduleChanges,
   formatCreated,
-  formatScheduledAt,
   NO_EMPLOYEE_LABEL,
   PeriodKey,
   resolveRange,
+  scheduledText,
 } from './bookingControl';
-import { COURTS, courtLabel, eventSummary, formatClock, formatDateTime, formatTime, localDateOf, todayISO } from './reservasUtils';
+import { COURTS, courtLabel, formatClock, formatDateTime, formatTime, localDateOf, todayISO } from './reservasUtils';
 
 interface BookingHistoryProps {
   refreshKey: number;
@@ -25,10 +26,12 @@ const selectClass =
 
 const employeeOf = (name: string) => name.trim() || NO_EMPLOYEE_LABEL;
 
-const statusLabel = (r: CourtReservation) => {
-  if (r.status === 'cancelada') return 'CANCELADA';
-  return r.booking_status === 'fuera_de_tiempo' ? 'FUERA DE TIEMPO' : 'A TIEMPO';
+const statusLabel = (r: BookingRecord) => {
+  if (r.cancelled) return 'CANCELADA';
+  return r.bookingStatus === 'fuera_de_tiempo' ? 'FUERA DE TIEMPO' : 'A TIEMPO';
 };
+
+const typeLabel = (r: BookingRecord) => (r.source === 'jugado' ? 'Turno jugado' : 'Reserva');
 
 export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
   const [period, setPeriod] = useState<PeriodKey>('mes');
@@ -36,7 +39,7 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
   const [employee, setEmployee] = useState('');
   const [day, setDay] = useState('');
   const [court, setCourt] = useState('');
-  const [rows, setRows] = useState<CourtReservation[]>([]);
+  const [rows, setRows] = useState<BookingRecord[]>([]);
   const [openings, setOpenings] = useState<Map<string, CourtSession>>(new Map());
   const [changes, setChanges] = useState<Map<string, CourtReservationHistory[]>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -56,11 +59,11 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
     setLoading(true);
     (async () => {
       try {
-        const reservationRows = await fetchBookingRows({ from, to });
-        const ids = reservationRows.map((r) => r.id);
+        const records = await fetchBookingRecords({ from, to });
+        const ids = records.filter((r) => r.source === 'reserva').map((r) => r.id);
         const [sessions, history] = await Promise.all([fetchOpenings(ids), fetchScheduleChanges(ids)]);
         if (cancelled) return;
-        setRows(reservationRows);
+        setRows(records);
         setOpenings(new Map(sessions.filter((s) => s.reservation_id).map((s) => [s.reservation_id as string, s])));
         const byReservation = new Map<string, CourtReservationHistory[]>();
         for (const h of history) byReservation.set(h.reservation_id, [...(byReservation.get(h.reservation_id) ?? []), h]);
@@ -77,14 +80,14 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
     };
   }, [from, to, invalidRange, refreshKey]);
 
-  const employees = useMemo(() => [...new Set(rows.map((r) => employeeOf(r.created_by)))].sort(), [rows]);
+  const employees = useMemo(() => [...new Set(rows.map((r) => employeeOf(r.createdBy)))].sort(), [rows]);
 
   const filtered = useMemo(
     () =>
       rows.filter(
         (r) =>
-          (!employee || employeeOf(r.created_by) === employee) &&
-          (!day || localDateOf(r.created_at) === day) &&
+          (!employee || employeeOf(r.createdBy) === employee) &&
+          (!day || localDateOf(r.createdAt) === day) &&
           (!court || String(r.court) === court)
       ),
     [rows, employee, day, court]
@@ -97,15 +100,15 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
       filtered.map((r) => {
         const opened = openings.get(r.id);
         return [
-          formatCreated(r.created_at),
+          formatCreated(r.createdAt),
           courtLabel(r.court),
-          r.event_type,
-          eventSummary(r),
-          formatScheduledAt(r.booking_scheduled_at, r.reservation_date, r.start_time),
-          `${r.reservation_date} ${formatTime(r.start_time)}-${formatTime(r.end_time)}`,
+          typeLabel(r),
+          r.label,
+          scheduledText(r),
+          r.currentSchedule,
           statusLabel(r),
-          r.booking_delay_minutes ?? 0,
-          employeeOf(r.created_by),
+          r.delayMinutes,
+          employeeOf(r.createdBy),
           opened ? `${formatDateTime(opened.opened_at)} ${formatClock(opened.opened_at)}` : 'Sin apertura',
           opened ? employeeOf(opened.opened_by) : '',
           changes.get(r.id)?.length ?? 0,
@@ -186,20 +189,18 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
                 {filtered.map((r) => {
                   const opened = openings.get(r.id);
                   const changeList = changes.get(r.id) ?? [];
-                  const isLate = r.booking_status === 'fuera_de_tiempo' && r.status !== 'cancelada';
+                  const isLate = r.bookingStatus === 'fuera_de_tiempo' && !r.cancelled;
                   const isOpen = expanded === r.id;
                   return (
-                    <Fragment key={r.id}>
-                      <tr className={`hover:bg-slate-50 transition-colors ${r.status === 'cancelada' ? 'opacity-60' : ''}`}>
-                        <td className="px-4 py-3 whitespace-nowrap tabular-nums">{formatCreated(r.created_at)}</td>
+                    <Fragment key={`${r.source}-${r.id}`}>
+                      <tr className={`hover:bg-slate-50 transition-colors ${r.cancelled ? 'opacity-60' : ''}`}>
+                        <td className="px-4 py-3 whitespace-nowrap tabular-nums">{formatCreated(r.createdAt)}</td>
                         <td className="px-4 py-3 whitespace-nowrap">{courtLabel(r.court)}</td>
                         <td className="px-4 py-3">
-                          <span className="font-semibold text-slate-800">{eventSummary(r) || r.event_type}</span>
-                          <span className="block text-xs text-slate-500 uppercase">{r.event_type}</span>
+                          <span className="font-semibold text-slate-800">{r.label}</span>
+                          <span className="block text-xs text-slate-500 uppercase">{typeLabel(r)}</span>
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap tabular-nums">
-                          {formatScheduledAt(r.booking_scheduled_at, r.reservation_date, r.start_time)}
-                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap tabular-nums">{scheduledText(r)}</td>
                         <td className="px-4 py-3">
                           <span
                             className={`inline-block rounded-md px-2 py-1 text-[11px] font-black tracking-wide whitespace-nowrap ${
@@ -212,11 +213,13 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
                           >
                             {statusLabel(r)}
                           </span>
-                          {isLate && <span className="block text-xs text-orange-700 font-semibold mt-1">{r.booking_delay_minutes} min de demora</span>}
+                          {isLate && <span className="block text-xs text-orange-700 font-semibold mt-1">{r.delayMinutes} min de demora</span>}
                         </td>
-                        <td className="px-4 py-3 whitespace-nowrap">{employeeOf(r.created_by)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">{employeeOf(r.createdBy)}</td>
                         <td className="px-4 py-3 whitespace-nowrap">
-                          {opened ? (
+                          {r.source === 'jugado' ? (
+                            <span className="text-slate-400">Turno jugado</span>
+                          ) : opened ? (
                             <>
                               <span className="tabular-nums">{formatDateTime(opened.opened_at)} {formatClock(opened.opened_at)}</span>
                               <span className="block text-xs text-slate-500">{employeeOf(opened.opened_by)}</span>
