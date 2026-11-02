@@ -9,6 +9,11 @@ interface CajaProps {
   onCloseShift: (closingCash: number) => void;
 }
 
+const MOVEMENT_CATEGORIES = ['alivio', 'alivios', 'cierre', 'cierre caja', 'cierre de mes', 'retiro', 'retiro efectivo', 'valores a 0'];
+
+const isMovementCategory = (category: string | null) =>
+  MOVEMENT_CATEGORIES.some(mc => (category || '').trim().toLowerCase().includes(mc));
+
 export default function Caja({ shift, onCloseShift }: CajaProps) {
   const [transactions, setTransactions] = useState<CashTransaction[]>([]);
   const [showModal, setShowModal] = useState(false);
@@ -46,8 +51,6 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     loadMethodBalances();
   }, []);
 
-  const MOVEMENT_CATEGORIES = ['alivio', 'alivios', 'cierre', 'cierre caja', 'cierre de mes', 'retiro', 'retiro efectivo'];
-
   const loadMonthlyMovements = async () => {
     const now = new Date();
     const firstDay = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1, 3, 0, 0, 0));
@@ -59,9 +62,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       .order('created_at', { ascending: false });
 
     if (data) {
-      const filtered = data.filter(tx =>
-        MOVEMENT_CATEGORIES.some(mc => (tx.category || '').trim().toLowerCase().includes(mc))
-      );
+      const filtered = data.filter(tx => isMovementCategory(tx.category));
       const total = filtered.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
       setMonthlyMovements(total);
       setMonthlyMovementsList(filtered);
@@ -243,15 +244,18 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     .filter(t => t.type === 'income')
     .reduce((sum, t) => sum + Number(t.amount), 0);
   const totalExpense = transactions
-    .filter(t => t.type === 'expense')
+    .filter(t => t.type === 'expense' && !isMovementCategory(t.category))
     .reduce((sum, t) => sum + Number(t.amount), 0);
-  const balance = totalIncome - totalExpense;
+  const totalMovements = transactions
+    .filter(t => t.type === 'expense' && isMovementCategory(t.category))
+    .reduce((sum, t) => sum + Number(t.amount), 0);
+  const balance = totalIncome - totalExpense - totalMovements;
 
   const openingCash = Number(shift?.opening_cash || 0);
   const expectedCash = openingCash + balance;
 
   const expenseTransactions = useMemo(() => {
-    return transactions.filter(t => t.type === 'expense');
+    return transactions.filter(t => t.type === 'expense' && !isMovementCategory(t.category));
   }, [transactions]);
 
   const expenseByCategory = useMemo(() => {
