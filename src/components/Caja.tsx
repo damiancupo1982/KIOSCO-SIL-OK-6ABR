@@ -1,6 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase, Shift, CashTransaction, Sale } from '../lib/supabase';
-import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, Table, Share2, Printer } from 'lucide-react';
+import { Wallet, Plus, DollarSign, TrendingUp, TrendingDown, LogOut, Clock, Calendar, Download, X, Filter, Table, Share2, Printer, Eraser } from 'lucide-react';
+import ZeroBalanceModal, { MethodBalances } from './ZeroBalanceModal';
+
+const BALANCE_METHODS = ['transferencia', 'qr', 'expensas'];
+const PAGE_SIZE = 1000;
 
 interface CajaProps {
   shift: Shift | null;
@@ -23,6 +27,8 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
   const [monthlyMovements, setMonthlyMovements] = useState(0);
   const [monthlyMovementsList, setMonthlyMovementsList] = useState<any[]>([]);
   const [showMovementsModal, setShowMovementsModal] = useState(false);
+  const [showZeroModal, setShowZeroModal] = useState(false);
+  const [methodBalances, setMethodBalances] = useState<MethodBalances>({ transferencia: 0, qr: 0, expensas: 0 });
   const [formData, setFormData] = useState({
     type: 'income' as 'income' | 'expense',
     category: '',
@@ -39,6 +45,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
 
   useEffect(() => {
     loadMonthlyMovements();
+    loadMethodBalances();
   }, []);
 
   const MOVEMENT_CATEGORIES = ['alivio', 'alivios', 'cierre', 'cierre caja', 'cierre de mes', 'retiro', 'retiro efectivo'];
@@ -61,6 +68,35 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       setMonthlyMovements(total);
       setMonthlyMovementsList(filtered);
     }
+  };
+
+  const loadMethodBalances = async () => {
+    const rows: { type: string; payment_method: string; amount: number }[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from('cash_transactions')
+        .select('type, payment_method, amount')
+        .in('payment_method', BALANCE_METHODS)
+        .order('id')
+        .range(from, from + PAGE_SIZE - 1);
+      if (error || !data) return;
+      rows.push(...data);
+      if (data.length < PAGE_SIZE) break;
+    }
+
+    const balances: MethodBalances = { transferencia: 0, qr: 0, expensas: 0 };
+    rows.forEach((row) => {
+      const method = row.payment_method as keyof MethodBalances;
+      const amount = Number(row.amount) || 0;
+      balances[method] += row.type === 'income' ? amount : -amount;
+    });
+    setMethodBalances(balances);
+  };
+
+  const reloadAllBalances = () => {
+    loadTransactions();
+    loadMonthlyMovements();
+    loadMethodBalances();
   };
 
   const loadTransactions = async () => {
@@ -205,8 +241,7 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
       description: formData.description
     }]);
 
-    loadTransactions();
-    loadMonthlyMovements();
+    reloadAllBalances();
     setShowModal(false);
     setFormData({ type: 'income', category: '', amount: '', payment_method: 'efectivo', description: '' });
   };
@@ -264,32 +299,10 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
     .reduce((sum, t) => sum + Number(t.amount), 0);
   const cashInBox = openingCash + incomeCash - expenseCash;
 
-  // Transferencias: ingresos - egresos
-  const incomeTransfer = transactions
-    .filter(t => t.type === 'income' && t.payment_method === 'transferencia')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const expenseTransfer = transactions
-    .filter(t => t.type === 'expense' && t.payment_method === 'transferencia')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const transferInBox = incomeTransfer - expenseTransfer;
-
-  // QR: ingresos - egresos
-  const incomeQr = transactions
-    .filter(t => t.type === 'income' && t.payment_method === 'qr')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const expenseQr = transactions
-    .filter(t => t.type === 'expense' && t.payment_method === 'qr')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const qrInBox = incomeQr - expenseQr;
-
-  // Expensas: ingresos - egresos
-  const incomeExpensas = transactions
-    .filter(t => t.type === 'income' && t.payment_method === 'expensas')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const expenseExpensas = transactions
-    .filter(t => t.type === 'expense' && t.payment_method === 'expensas')
-    .reduce((sum, t) => sum + Number(t.amount), 0);
-  const expensasInBox = incomeExpensas - expenseExpensas;
+  // Transferencias, QR y expensas: saldo histórico completo, no el del filtro de fechas
+  const transferInBox = methodBalances.transferencia;
+  const qrInBox = methodBalances.qr;
+  const expensasInBox = methodBalances.expensas;
 
   // Cuenta Corriente: ventas a crédito - pagos recibidos
   const cuentaCorrienteDeuda = transactions
@@ -619,6 +632,13 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
         <div className="flex justify-between items-center flex-wrap gap-4">
           <h3 className="text-xl font-bold text-slate-800">Movimientos de Caja</h3>
           <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => setShowZeroModal(true)}
+              className="bg-white hover:bg-amber-50 text-amber-700 border-2 border-amber-300 px-4 py-2.5 rounded-xl flex items-center gap-2 font-semibold transition-colors"
+            >
+              <Eraser size={18} />
+              Valores a 0
+            </button>
             <button
               onClick={() => setShowResumenDiario(true)}
               className="bg-gradient-to-r from-slate-700 to-slate-900 hover:from-slate-800 hover:to-black text-white px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-lg transition-all"
@@ -1336,6 +1356,17 @@ export default function Caja({ shift, onCloseShift }: CajaProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {showZeroModal && (
+        <ZeroBalanceModal
+          balances={methodBalances}
+          onClose={() => setShowZeroModal(false)}
+          onDone={() => {
+            setShowZeroModal(false);
+            reloadAllBalances();
+          }}
+        />
       )}
 
       {/* Modal cierre de turno */}
