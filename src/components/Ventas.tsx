@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
-import { supabase, Product, Professor, SaleItem, Shift, CashTransaction } from '../lib/supabase';
+import { supabase, CourtPlayer, Product, Professor, SaleItem, Shift, CashTransaction } from '../lib/supabase';
 import { fetchMethodBalances } from '../lib/cashBalances';
 import { Search, Minus, Plus, Trash2, ShoppingCart, CreditCard, AlertTriangle, Wallet, Banknote, ArrowRightLeft, QrCode, Building2 } from 'lucide-react';
 import { EMPTY_PAYMENTS, LOTE_INCORRECTO_MSG, PaymentAmounts, isInvalidCcLot, preparePayments, processSale } from '../lib/processSale';
 import PaymentFields from './PaymentFields';
+import LotPersonInput from './reservas/LotPersonInput';
+
+const EMPTY_CUSTOMER: CourtPlayer = { lot: '', name: '', socio_id: null, is_socio: false };
 
 interface VentasProps {
   shift: Shift | null;
@@ -17,8 +20,7 @@ export default function Ventas({ shift }: VentasProps) {
 
   const [selectedCategory, setSelectedCategory] = useState<string>('todas');
 
-  const [customerName, setCustomerName] = useState('');
-  const [customerLot, setCustomerLot] = useState('');
+  const [customer, setCustomer] = useState<CourtPlayer>(EMPTY_CUSTOMER);
 
   const [amounts, setAmounts] = useState<PaymentAmounts>(EMPTY_PAYMENTS);
   const cuentaCorrienteAmount = amounts.cuenta_corriente;
@@ -185,7 +187,7 @@ export default function Ventas({ shift }: VentasProps) {
       return alert('Carrito vacío o sin turno activo');
     }
 
-    const prepared = preparePayments(amounts, total, customerName, customerLot);
+    const prepared = preparePayments(amounts, total, customer.name, customer.lot);
     if ('error' in prepared) {
       return alert(prepared.error);
     }
@@ -194,8 +196,8 @@ export default function Ventas({ shift }: VentasProps) {
       shift,
       items: cart,
       payments: prepared.payments,
-      customerName,
-      customerLot,
+      customerName: customer.name,
+      customerLot: customer.lot,
     });
     if (!result.ok) {
       return alert(result.error);
@@ -205,14 +207,13 @@ export default function Ventas({ shift }: VentasProps) {
     loadMonthlyBalances();
 
     setCart([]);
-    setCustomerName('');
-    setCustomerLot('');
+    setCustomer(EMPTY_CUSTOMER);
     setAmounts(EMPTY_PAYMENTS);
     loadProducts();
     checkOldDebts();
   };
 
-  const invalidCcLot = cuentaCorrienteAmount > 0 && isInvalidCcLot(customerLot);
+  const invalidCcLot = cuentaCorrienteAmount > 0 && isInvalidCcLot(customer.lot);
 
   const baseCategories = ['Bebida', 'Comida', 'Artículos de Deporte'];
   const categories = Array.from(
@@ -450,30 +451,7 @@ export default function Ventas({ shift }: VentasProps) {
             </div>
 
             <div className="space-y-2 mb-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input
-                  type="text"
-                  placeholder={cuentaCorrienteAmount > 0 ? "Nombre del cliente (obligatorio)" : "Nombre del cliente"}
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  className={`w-full px-3 py-2 bg-white border-2 rounded-xl text-sm focus:ring-2 ${
-                    cuentaCorrienteAmount > 0 && !customerName.trim()
-                      ? 'border-red-400 focus:ring-red-400 animate-pulse'
-                      : 'border-slate-200 focus:ring-emerald-500'
-                  }`}
-                />
-                <input
-                  type="text"
-                  placeholder={cuentaCorrienteAmount > 0 ? "Lote (obligatorio)" : "Lote"}
-                  value={customerLot}
-                  onChange={(e) => setCustomerLot(e.target.value)}
-                  className={`w-full px-3 py-2 bg-white border-2 rounded-xl text-sm focus:ring-2 ${
-                    cuentaCorrienteAmount > 0 && (!customerLot.trim() || invalidCcLot)
-                      ? 'border-red-400 focus:ring-red-400 animate-pulse'
-                      : 'border-slate-200 focus:ring-emerald-500'
-                  }`}
-                />
-              </div>
+              <LotPersonInput label="Cliente" value={customer} onChange={setCustomer} />
               {invalidCcLot && (
                 <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-xl px-3 py-2 text-sm font-medium">
                   <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
