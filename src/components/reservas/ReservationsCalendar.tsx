@@ -45,6 +45,9 @@ const playerLabel = (lot: string, name: string) => `${name}${lot ? ` · Lote ${l
 const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): AgendaBlock[] => {
   const blocks: AgendaBlock[] = [];
   const byId = new Map(events.map((e) => [e.id, e]));
+  const openingByReservation = new Map(
+    sessions.filter((s) => s.reservation_id).map((s) => [s.reservation_id as string, s])
+  );
   const nowMin = minutesOf(nowTimeHHMM());
   const today = todayISO();
 
@@ -61,6 +64,7 @@ const buildBlocks = (events: CourtReservation[], sessions: CourtSession[]): Agen
       headline: eventSummary(e) || fallback,
       detail: e.notes,
       reservation: e,
+      openedSession: openingByReservation.get(e.id) ?? null,
     });
   }
 

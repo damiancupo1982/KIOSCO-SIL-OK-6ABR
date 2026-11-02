@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CalendarPlus, GraduationCap, Loader2, PlayCircle, Save, Trophy, Wrench, X, XCircle } from 'lucide-react';
 import { supabase, CourtPlayer, CourtReservation, Professor } from '../../lib/supabase';
 import LotPersonInput from './LotPersonInput';
+import BookingInfoCard, { OpeningRecord } from './BookingInfoCard';
 import {
   COURTS,
   EVENT_META,
@@ -10,6 +11,7 @@ import {
   hhmmOf,
   minutesOf,
   rpcErrorMessage,
+  nowTimeHHMM,
   todayISO,
 } from './reservasUtils';
 
@@ -74,6 +76,23 @@ export default function EventModal({
   const [notes, setNotes] = useState(event?.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [showLateWarning, setShowLateWarning] = useState(false);
+  const [opened, setOpened] = useState<OpeningRecord | undefined>(undefined);
+
+  const startAlreadyPassed = (() => {
+    if (date < todayISO()) return true;
+    return date === todayISO() && minutesOf(start) < minutesOf(nowTimeHHMM());
+  })();
+
+  useEffect(() => {
+    if (!event?.booking_status) return;
+    supabase
+      .from('court_sessions')
+      .select('opened_at, opened_by')
+      .eq('reservation_id', event.id)
+      .maybeSingle()
+      .then(({ data }) => setOpened((data as OpeningRecord) ?? null));
+  }, [event]);
 
   useEffect(() => {
     supabase.from('professors').select('*').eq('active', true).order('name').then(({ data }) => {
@@ -105,13 +124,14 @@ export default function EventModal({
     setStart(value);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (lateAcknowledged = false) => {
     setError('');
     if (!courts.length) return setError('Seleccione al menos una cancha.');
     if (!date || !start || !end) return setError('Complete fecha, hora desde y hora hasta.');
     if (minutesOf(end) <= minutesOf(start)) return setError('La hora "hasta" debe ser posterior a la hora "desde".');
     if (type === 'reserva' && !titular.name.trim()) return setError('Ingrese el nombre del titular.');
     if (type === 'torneo' && !title.trim()) return setError('Ingrese el nombre del torneo.');
+    if (!isEdit && startAlreadyPassed && !lateAcknowledged) return setShowLateWarning(true);
     setSaving(true);
     const { error: rpcError } = await supabase.rpc('save_court_event', {
       p_group_id: event?.event_group ?? null,
@@ -162,6 +182,11 @@ export default function EventModal({
         </div>
 
         <div className="p-6 space-y-4 overflow-y-auto">
+          {event?.booking_status && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <BookingInfoCard reservation={event} opened={opened} />
+            </div>
+          )}
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className={labelClass.replace(' mb-2', '')}>{multiCourt ? 'Canchas' : 'Cancha'}</label>
@@ -279,7 +304,7 @@ export default function EventModal({
                 </button>
               )}
               <button
-                onClick={handleSave}
+                onClick={() => handleSave()}
                 disabled={saving}
                 className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl disabled:bg-slate-300 font-semibold transition-colors ${meta.button}`}
               >
@@ -292,6 +317,34 @@ export default function EventModal({
           )}
         </div>
       </div>
+
+      {showLateWarning && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 border-t-4 border-orange-500">
+            <h4 className="text-lg font-bold text-slate-800">Reserva fuera de tiempo</h4>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              La hora de inicio de esta reserva ya pasó. Se registrará como carga fuera de tiempo y quedará identificada en la agenda y en los controles de carga.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setShowLateWarning(false);
+                  handleSave(true);
+                }}
+                className="w-full py-3 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold transition-colors"
+              >
+                ENTENDIDO — REGISTRAR RESERVA FUERA DE TIEMPO
+              </button>
+              <button
+                onClick={() => setShowLateWarning(false)}
+                className="w-full py-3 rounded-xl border-2 border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold transition-colors"
+              >
+                Volver y corregir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

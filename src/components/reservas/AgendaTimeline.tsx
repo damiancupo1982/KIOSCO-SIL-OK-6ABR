@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { CourtReservation } from '../../lib/supabase';
+import BookingInfoCard, { OpeningRecord } from './BookingInfoCard';
 import { EVENT_META, EventType, hhmmOf, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
 
 export interface AgendaBlock {
@@ -13,6 +14,7 @@ export interface AgendaBlock {
   headline: string;
   detail: string;
   reservation?: CourtReservation;
+  openedSession?: OpeningRecord;
   sessionId?: string;
 }
 
@@ -37,6 +39,7 @@ const DEFAULT_START_HOUR = 7;
 
 export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyClick }: AgendaTimelineProps) {
   const [nowMin, setNowMin] = useState(() => minutesOf(nowTimeHHMM()));
+  const [hovered, setHovered] = useState<{ block: AgendaBlock; rect: DOMRect } | null>(null);
   useEffect(() => {
     const t = setInterval(() => setNowMin(minutesOf(nowTimeHHMM())), 60000);
     return () => clearInterval(t);
@@ -117,10 +120,21 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
                         e.stopPropagation();
                         onBlockClick(b);
                       }}
+                      onMouseEnter={(e) => {
+                        if (b.reservation?.booking_status) setHovered({ block: b, rect: e.currentTarget.getBoundingClientRect() });
+                      }}
+                      onMouseLeave={() => setHovered(null)}
                       title={`${hhmmOf(b.startMin)} - ${hhmmOf(b.endMin)} ${meta.label}\n${b.headline}${b.detail ? `\n${b.detail}` : ''}`}
-                      className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all cursor-pointer hover:shadow-md hover:z-10 ${meta.block}`}
+                      className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all cursor-pointer hover:shadow-md hover:z-10 ${meta.block} ${
+                        b.reservation?.booking_status === 'fuera_de_tiempo' ? 'ring-2 ring-orange-400 ring-inset' : ''
+                      }`}
                       style={{ top: top(b.startMin) + 1, height: blockHeight - 2 }}
                     >
+                      {b.reservation?.booking_status === 'fuera_de_tiempo' && (
+                        <span className="absolute right-1 top-1 rounded bg-orange-600 px-1 py-px text-[9px] font-black tracking-wide text-white shadow-sm">
+                          FUERA DE TIEMPO
+                        </span>
+                      )}
                       <p className="font-bold flex items-center gap-1 truncate">
                         {compact ? (
                           <>
@@ -147,6 +161,21 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
           ))}
         </div>
       </div>
+
+      {hovered && (
+        <div
+          className="fixed z-50 w-72 pointer-events-none rounded-xl bg-white border border-slate-200 shadow-2xl p-4"
+          style={{
+            top: Math.max(8, Math.min(hovered.rect.top, window.innerHeight - 340)),
+            left:
+              hovered.rect.right + 300 > window.innerWidth
+                ? Math.max(8, hovered.rect.left - 296)
+                : hovered.rect.right + 8,
+          }}
+        >
+          <BookingInfoCard reservation={hovered.block.reservation!} opened={hovered.block.openedSession} />
+        </div>
+      )}
     </div>
   );
 }

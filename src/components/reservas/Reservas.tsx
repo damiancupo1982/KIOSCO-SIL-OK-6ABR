@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CalendarCheck, CalendarDays, CalendarPlus, ChevronRight, History, LayoutGrid } from 'lucide-react';
+import { CalendarCheck, CalendarDays, CalendarPlus, ChevronRight, ClipboardCheck, FileSpreadsheet, History, LayoutGrid } from 'lucide-react';
 import { supabase, CourtReservation, CourtSession, Shift } from '../../lib/supabase';
+import BookingControlPanel from './BookingControlPanel';
+import BookingHistory from './BookingHistory';
 import CourtCard from './CourtCard';
 import EventModal from './EventModal';
 import OpenCourtModal from './OpenCourtModal';
@@ -20,7 +22,7 @@ import {
   todayISO,
 } from './reservasUtils';
 
-type Tab = 'canchas' | 'agenda' | 'historial';
+type Tab = 'canchas' | 'agenda' | 'historial' | 'control' | 'auditoria';
 
 interface EventDraft {
   type: EventType;
@@ -120,6 +122,8 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
     { id: 'canchas', label: 'Canchas', icon: LayoutGrid },
     { id: 'agenda', label: 'Agenda', icon: CalendarDays },
     { id: 'historial', label: 'Historial', icon: History },
+    { id: 'control', label: 'Control de carga', icon: ClipboardCheck },
+    { id: 'auditoria', label: 'Auditoría y CSV', icon: FileSpreadsheet },
   ];
 
   return (
@@ -212,6 +216,10 @@ export default function Reservas({ shift }: { shift: Shift | null }) {
       )}
 
       {tab === 'historial' && <TurnosHistory refreshKey={refreshKey} />}
+
+      {tab === 'control' && <BookingControlPanel refreshKey={refreshKey} />}
+
+      {tab === 'auditoria' && <BookingHistory refreshKey={refreshKey} />}
 
       {eventDraft && (
         <EventModal

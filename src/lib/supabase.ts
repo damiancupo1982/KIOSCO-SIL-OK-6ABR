@@ -147,6 +147,24 @@ export interface CourtReservation {
   session_id: string | null;
   created_by: string;
   created_at: string;
+  booking_scheduled_at: string | null;
+  booking_status: 'a_tiempo' | 'fuera_de_tiempo' | null;
+  booking_delay_minutes: number | null;
+}
+
+export interface CourtReservationHistory {
+  id: string;
+  reservation_id: string;
+  event_group: string;
+  court: number;
+  changed_at: string;
+  changed_by: string;
+  previous_date: string;
+  previous_start: string;
+  previous_end: string;
+  new_date: string;
+  new_start: string;
+  new_end: string;
 }
 
 export interface CourtSession {
