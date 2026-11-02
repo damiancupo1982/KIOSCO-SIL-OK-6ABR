@@ -323,7 +323,7 @@ export default function EventModal({
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-4 border-t-4 border-orange-500">
             <h4 className="text-lg font-bold text-slate-800">Reserva fuera de tiempo</h4>
             <p className="text-sm text-slate-600 leading-relaxed">
-              La hora de inicio de esta reserva ya pasó. Se registrará como carga fuera de tiempo y quedará identificada en la agenda y en los controles de carga.
+              RECORDA QUE ES MUY IMPORTANTE QUE LAS RESERVAS SE HAGAN EN EL MOMENTO, LA CARGA TARDIA PUEDE TENER ERRORES Y OMISIONES.
             </p>
             <div className="flex flex-col gap-2">
               <button
