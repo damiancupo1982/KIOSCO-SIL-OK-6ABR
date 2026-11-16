@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { CourtSession } from '../../lib/supabase';
 import BookingPeriodPicker from './BookingPeriodPicker';
 import {
+  BOOKING_STATUS_LABEL,
+  BOOKING_STATUSES,
   BookingRecord,
+  BookingStatus,
   DateRange,
   fetchBookingRecords,
   fetchOpeningsInRange,
@@ -16,6 +19,27 @@ import { todayISO } from './reservasUtils';
 interface BookingControlPanelProps {
   refreshKey: number;
 }
+
+const CATEGORY_CARD: Record<BookingStatus, string> = {
+  anticipada: 'border-sky-200 text-sky-700',
+  a_tiempo: 'border-emerald-200 text-emerald-700',
+  carga_tardia: 'border-orange-200 text-orange-700',
+  carga_fuera_de_fecha: 'border-red-200 text-red-700',
+};
+
+const CATEGORY_TEXT: Record<BookingStatus, string> = {
+  anticipada: 'text-sky-700',
+  a_tiempo: 'text-emerald-700',
+  carga_tardia: 'text-orange-700',
+  carga_fuera_de_fecha: 'text-red-700',
+};
+
+const CATEGORY_BAR: Record<BookingStatus, string> = {
+  anticipada: 'bg-sky-500',
+  a_tiempo: 'bg-emerald-500',
+  carga_tardia: 'bg-orange-500',
+  carga_fuera_de_fecha: 'bg-red-500',
+};
 
 export default function BookingControlPanel({ refreshKey }: BookingControlPanelProps) {
   const [period, setPeriod] = useState<PeriodKey>('mes');
@@ -70,8 +94,8 @@ export default function BookingControlPanel({ refreshKey }: BookingControlPanelP
         return {
           name,
           total: stat?.total ?? 0,
-          late: stat?.late ?? 0,
-          latePct: stat?.latePct ?? 0,
+          counts: stat?.counts ?? { anticipada: 0, a_tiempo: 0, carga_tardia: 0, carga_fuera_de_fecha: 0 },
+          compliancePct: stat?.compliancePct ?? 0,
           avgDelay: stat?.avgDelay ?? 0,
           openings: openingCounts.get(name) ?? 0,
         };
@@ -104,21 +128,44 @@ export default function BookingControlPanel({ refreshKey }: BookingControlPanelP
           <p className="mt-1 text-xs text-slate-500">100% del período</p>
         </div>
         <div className="bg-white border border-emerald-200 rounded-2xl p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">A tiempo</p>
-          <p className="mt-2 text-3xl font-black text-emerald-700">{loading ? '…' : summary.onTime}</p>
-          <p className="mt-1 text-xs font-semibold text-emerald-700">{summary.onTimePct}% de las cargas</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Cumplimiento</p>
+          <p className="mt-2 text-3xl font-black text-emerald-700">{loading ? '…' : `${summary.compliancePct}%`}</p>
+          <p className="mt-1 text-xs font-semibold text-emerald-700">
+            {loading ? '' : `${summary.compliant} anticipadas o a tiempo`}
+          </p>
         </div>
-        <div className="bg-white border border-orange-200 rounded-2xl p-5 shadow-sm">
-          <p className="text-xs font-bold uppercase tracking-wide text-orange-700">Fuera de tiempo</p>
-          <p className="mt-2 text-3xl font-black text-orange-700">{loading ? '…' : summary.late}</p>
-          <p className="mt-1 text-xs font-semibold text-orange-700">{summary.latePct}% de las cargas</p>
+        <div className="bg-white border border-red-200 rounded-2xl p-5 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-wide text-red-700">Incumplimientos</p>
+          <p className="mt-2 text-3xl font-black text-red-700">{loading ? '…' : `${summary.nonCompliantPct}%`}</p>
+          <p className="mt-1 text-xs font-semibold text-red-700">
+            {loading ? '' : `${summary.nonCompliant} cargas tardías o fuera de fecha`}
+          </p>
         </div>
       </div>
 
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {BOOKING_STATUSES.map((status) => (
+          <div key={status} className={`bg-white border rounded-2xl p-4 shadow-sm ${CATEGORY_CARD[status]}`}>
+            <p className="text-xs font-bold uppercase tracking-wide">{BOOKING_STATUS_LABEL[status]}</p>
+            <p className="mt-2 text-2xl font-black text-slate-900">{loading ? '…' : summary.counts[status]}</p>
+            <p className="mt-1 text-xs font-semibold">{loading ? '' : `${summary.pcts[status]}% de las cargas`}</p>
+          </div>
+        ))}
+      </div>
+
       {summary.total > 0 && (
-        <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100" role="img" aria-label={`${summary.onTimePct}% a tiempo, ${summary.latePct}% fuera de tiempo`}>
-          <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${summary.onTimePct}%` }} />
-          <div className="h-full bg-orange-500 transition-all duration-500" style={{ width: `${summary.latePct}%` }} />
+        <div
+          className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100"
+          role="img"
+          aria-label={BOOKING_STATUSES.map((s) => `${BOOKING_STATUS_LABEL[s]} ${summary.pcts[s]}%`).join(', ')}
+        >
+          {BOOKING_STATUSES.map((status) => (
+            <div
+              key={status}
+              className={`h-full transition-all duration-500 ${CATEGORY_BAR[status]}`}
+              style={{ width: `${summary.pcts[status]}%` }}
+            />
+          ))}
         </div>
       )}
 
@@ -140,8 +187,12 @@ export default function BookingControlPanel({ refreshKey }: BookingControlPanelP
                 <tr>
                   <th className="text-left px-5 py-3 font-bold">Empleado</th>
                   <th className="text-right px-4 py-3 font-bold">Cargas</th>
-                  <th className="text-right px-4 py-3 font-bold">Fuera de tiempo</th>
-                  <th className="text-right px-4 py-3 font-bold">% fuera</th>
+                  {BOOKING_STATUSES.map((status) => (
+                    <th key={status} className={`text-right px-4 py-3 font-bold ${CATEGORY_TEXT[status]}`}>
+                      {BOOKING_STATUS_LABEL[status]}
+                    </th>
+                  ))}
+                  <th className="text-right px-4 py-3 font-bold">% cumplimiento</th>
                   <th className="text-right px-4 py-3 font-bold">Demora promedio</th>
                   <th className="text-right px-5 py-3 font-bold">Aperturas de cancha</th>
                 </tr>
@@ -151,9 +202,11 @@ export default function BookingControlPanel({ refreshKey }: BookingControlPanelP
                   <tr key={row.name} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3 font-semibold text-slate-800">{row.name}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{row.total}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-orange-700 font-semibold">{row.late}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{row.latePct.toFixed(1)}%</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{row.late ? `${row.avgDelay} min` : '—'}</td>
+                    {BOOKING_STATUSES.map((status) => (
+                      <td key={status} className="px-4 py-3 text-right tabular-nums">{row.counts[status]}</td>
+                    ))}
+                    <td className="px-4 py-3 text-right tabular-nums">{row.total ? `${row.compliancePct.toFixed(1)}%` : '—'}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{row.avgDelay ? `${row.avgDelay} min` : '—'}</td>
                     <td className="px-5 py-3 text-right tabular-nums">{row.openings}</td>
                   </tr>
                 ))}

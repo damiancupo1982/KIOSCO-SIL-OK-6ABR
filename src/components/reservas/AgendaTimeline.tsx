@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { CourtReservation } from '../../lib/supabase';
 import BookingInfoCard, { OpeningRecord } from './BookingInfoCard';
-import { BookingRecord } from './bookingControl';
+import { BOOKING_STATUS_LABEL, BOOKING_STATUS_STYLE, BookingRecord } from './bookingControl';
 import { EVENT_META, EventType, hhmmOf, minutesOf, nowTimeHHMM, todayISO } from './reservasUtils';
 
 export interface AgendaBlock {
@@ -128,13 +128,13 @@ export default function AgendaTimeline({ columns, blocks, onBlockClick, onEmptyC
                       onMouseLeave={() => setHovered(null)}
                       title={`${hhmmOf(b.startMin)} - ${hhmmOf(b.endMin)} ${meta.label}\n${b.headline}${b.detail ? `\n${b.detail}` : ''}`}
                       className={`absolute left-1 right-1 rounded-lg border-l-4 px-2 py-1 overflow-hidden shadow-sm text-[11px] leading-tight transition-all cursor-pointer hover:shadow-md hover:z-10 ${meta.block} ${
-                        b.booking?.bookingStatus === 'fuera_de_tiempo' ? 'ring-2 ring-orange-400 ring-inset' : ''
+                        b.booking ? `ring-2 ring-inset ${BOOKING_STATUS_STYLE[b.booking.bookingStatus].ring}` : ''
                       }`}
                       style={{ top: top(b.startMin) + 1, height: blockHeight - 2 }}
                     >
-                      {b.booking?.bookingStatus === 'fuera_de_tiempo' && (
-                        <span className="absolute right-1 top-1 rounded bg-orange-600 px-1 py-px text-[9px] font-black tracking-wide text-white shadow-sm">
-                          FUERA DE TIEMPO
+                      {b.booking && (
+                        <span className={`absolute right-1 top-1 rounded px-1 py-px text-[9px] font-black tracking-wide text-white shadow-sm ${BOOKING_STATUS_STYLE[b.booking.bookingStatus].badge}`}>
+                          {BOOKING_STATUS_LABEL[b.booking.bookingStatus].toUpperCase()}
                         </span>
                       )}
                       <p className="font-bold flex items-center gap-1 truncate">

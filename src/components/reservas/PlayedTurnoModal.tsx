@@ -3,6 +3,7 @@ import { CalendarCheck, Link2, Loader2, X } from 'lucide-react';
 import { supabase, CourtPlayer, CourtReservation } from '../../lib/supabase';
 import LotPersonInput from './LotPersonInput';
 import LateBookingWarning from './LateBookingWarning';
+import { bookingStatusAt, LateStatus } from './bookingControl';
 import { addDaysISO, COURTS, formatTime, hhmmOf, minutesOf, rpcErrorMessage, todayISO } from './reservasUtils';
 
 interface PlayedTurnoModalProps {
@@ -27,7 +28,7 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
   const [players, setPlayers] = useState<CourtPlayer[]>([emptyPlayer(), emptyPlayer(), emptyPlayer(), emptyPlayer()]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [showLateWarning, setShowLateWarning] = useState(false);
+  const [lateWarning, setLateWarning] = useState<LateStatus | null>(null);
 
   useEffect(() => {
     setLinked(null);
@@ -79,7 +80,10 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
     const incomplete = players.findIndex((p) => p.lot.trim() && !p.name.trim());
     if (incomplete >= 0) return setError(`Complete el nombre del Jugador ${incomplete + 1} o borre su lote.`);
 
-    if (!lateAcknowledged) return setShowLateWarning(true);
+    if (!lateAcknowledged) {
+      const predicted = bookingStatusAt(new Date(), date, start);
+      if (predicted === 'carga_tardia' || predicted === 'carga_fuera_de_fecha') return setLateWarning(predicted);
+    }
     setSaving(true);
     const { data, error: rpcError } = await supabase.rpc('open_played_court_session', {
       p_court: court,
@@ -206,13 +210,14 @@ export default function PlayedTurnoModal({ userName, onClose, onDone }: PlayedTu
         </div>
       </div>
 
-      {showLateWarning && (
+      {lateWarning && (
         <LateBookingWarning
+          status={lateWarning}
           onConfirm={() => {
-            setShowLateWarning(false);
+            setLateWarning(null);
             handleSave(true);
           }}
-          onCancel={() => setShowLateWarning(false)}
+          onCancel={() => setLateWarning(null)}
         />
       )}
     </div>

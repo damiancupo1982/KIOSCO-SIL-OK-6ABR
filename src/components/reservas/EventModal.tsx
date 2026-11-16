@@ -3,7 +3,7 @@ import { CalendarPlus, GraduationCap, Loader2, PlayCircle, Save, Trophy, Wrench,
 import { supabase, CourtPlayer, CourtReservation, Professor } from '../../lib/supabase';
 import LotPersonInput from './LotPersonInput';
 import BookingInfoCard, { OpeningRecord } from './BookingInfoCard';
-import { reservationToRecord } from './bookingControl';
+import { bookingStatusAt, LateStatus, reservationToRecord } from './bookingControl';
 import LateBookingWarning from './LateBookingWarning';
 import {
   COURTS,
@@ -13,7 +13,6 @@ import {
   hhmmOf,
   minutesOf,
   rpcErrorMessage,
-  nowTimeHHMM,
   todayISO,
 } from './reservasUtils';
 
@@ -78,14 +77,9 @@ export default function EventModal({
   const [notes, setNotes] = useState(event?.notes ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [showLateWarning, setShowLateWarning] = useState(false);
+  const [lateWarning, setLateWarning] = useState<LateStatus | null>(null);
   const [opened, setOpened] = useState<OpeningRecord | undefined>(undefined);
   const eventRecord = event ? reservationToRecord(event) : null;
-
-  const startAlreadyPassed = (() => {
-    if (date < todayISO()) return true;
-    return date === todayISO() && minutesOf(start) < minutesOf(nowTimeHHMM());
-  })();
 
   useEffect(() => {
     if (!event?.booking_status) return;
@@ -134,7 +128,10 @@ export default function EventModal({
     if (minutesOf(end) <= minutesOf(start)) return setError('La hora "hasta" debe ser posterior a la hora "desde".');
     if (type === 'reserva' && !titular.name.trim()) return setError('Ingrese el nombre del titular.');
     if (type === 'torneo' && !title.trim()) return setError('Ingrese el nombre del torneo.');
-    if (!isEdit && startAlreadyPassed && !lateAcknowledged) return setShowLateWarning(true);
+    if (!isEdit && !lateAcknowledged) {
+      const predicted = bookingStatusAt(new Date(), date, start);
+      if (predicted === 'carga_tardia' || predicted === 'carga_fuera_de_fecha') return setLateWarning(predicted);
+    }
     setSaving(true);
     const { error: rpcError } = await supabase.rpc('save_court_event', {
       p_group_id: event?.event_group ?? null,
@@ -321,13 +318,14 @@ export default function EventModal({
         </div>
       </div>
 
-      {showLateWarning && (
+      {lateWarning && (
         <LateBookingWarning
+          status={lateWarning}
           onConfirm={() => {
-            setShowLateWarning(false);
+            setLateWarning(null);
             handleSave(true);
           }}
-          onCancel={() => setShowLateWarning(false)}
+          onCancel={() => setLateWarning(null)}
         />
       )}
     </div>

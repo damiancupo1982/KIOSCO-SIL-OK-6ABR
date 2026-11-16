@@ -12,6 +12,36 @@ import {
 
 export type PeriodKey = 'hoy' | 'ayer' | 'semana' | 'mes' | 'mes_anterior' | 'rango';
 
+export type BookingStatus = 'anticipada' | 'a_tiempo' | 'carga_tardia' | 'carga_fuera_de_fecha';
+
+export const BOOKING_STATUSES: BookingStatus[] = ['anticipada', 'a_tiempo', 'carga_tardia', 'carga_fuera_de_fecha'];
+
+export const BOOKING_STATUS_LABEL: Record<BookingStatus, string> = {
+  anticipada: 'Anticipada',
+  a_tiempo: 'A tiempo',
+  carga_tardia: 'Carga tardía',
+  carga_fuera_de_fecha: 'Carga fuera de fecha',
+};
+
+export const BOOKING_STATUS_STYLE: Record<BookingStatus, { badge: string; ring: string }> = {
+  anticipada: { badge: 'bg-sky-600', ring: 'ring-sky-400' },
+  a_tiempo: { badge: 'bg-emerald-600', ring: 'ring-emerald-400' },
+  carga_tardia: { badge: 'bg-orange-600', ring: 'ring-orange-400' },
+  carga_fuera_de_fecha: { badge: 'bg-red-600', ring: 'ring-red-500' },
+};
+
+export const isNonCompliant = (status: BookingStatus) => status === 'carga_tardia' || status === 'carga_fuera_de_fecha';
+
+export type LateStatus = Exclude<BookingStatus, 'anticipada' | 'a_tiempo'>;
+
+export const bookingStatusAt = (created: Date, date: string, start: string): BookingStatus => {
+  if (localDateOf(created.toISOString()) > date) return 'carga_fuera_de_fecha';
+  const diffMs = created.getTime() - new Date(`${date}T${start}:00-03:00`).getTime();
+  if (diffMs < -10 * 60_000) return 'anticipada';
+  if (diffMs <= 30 * 60_000) return 'a_tiempo';
+  return 'carga_tardia';
+};
+
 export interface DateRange {
   from: string;
   to: string;
@@ -66,7 +96,7 @@ export interface BookingRecord {
   createdAt: string;
   createdBy: string;
   cancelled: boolean;
-  bookingStatus: 'a_tiempo' | 'fuera_de_tiempo';
+  bookingStatus: BookingStatus;
   delayMinutes: number;
   scheduledAt: string | null;
   scheduledFallback: string;
@@ -187,30 +217,49 @@ const countableRecords = (records: BookingRecord[]) => {
   });
 };
 
+export type StatusCounts = Record<BookingStatus, number>;
+
 export interface EmployeeStat {
   name: string;
   total: number;
-  late: number;
-  latePct: number;
+  counts: StatusCounts;
+  nonCompliant: number;
+  compliancePct: number;
   avgDelay: number;
 }
 
 export interface BookingSummary {
   total: number;
-  late: number;
-  onTime: number;
-  latePct: number;
-  onTimePct: number;
+  counts: StatusCounts;
+  pcts: StatusCounts;
+  compliant: number;
+  compliancePct: number;
+  nonCompliant: number;
+  nonCompliantPct: number;
   employees: EmployeeStat[];
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
+const pct = (part: number, total: number) => (total ? round1((part / total) * 100) : 0);
+
+const countStatuses = (list: BookingRecord[]): StatusCounts => {
+  const counts: StatusCounts = { anticipada: 0, a_tiempo: 0, carga_tardia: 0, carga_fuera_de_fecha: 0 };
+  for (const r of list) counts[r.bookingStatus] += 1;
+  return counts;
+};
 
 export const summarizeBookings = (records: BookingRecord[]): BookingSummary => {
   const groups = countableRecords(records);
   const total = groups.length;
-  const late = groups.filter((r) => r.bookingStatus === 'fuera_de_tiempo').length;
-  const latePct = total ? round1((late / total) * 100) : 0;
+  const counts = countStatuses(groups);
+  const compliant = counts.anticipada + counts.a_tiempo;
+  const nonCompliant = counts.carga_tardia + counts.carga_fuera_de_fecha;
+  const pcts = {
+    anticipada: pct(counts.anticipada, total),
+    a_tiempo: pct(counts.a_tiempo, total),
+    carga_tardia: pct(counts.carga_tardia, total),
+    carga_fuera_de_fecha: pct(counts.carga_fuera_de_fecha, total),
+  };
   const byEmployee = new Map<string, BookingRecord[]>();
   for (const r of groups) {
     const name = r.createdBy.trim() || NO_EMPLOYEE_LABEL;
@@ -218,18 +267,29 @@ export const summarizeBookings = (records: BookingRecord[]): BookingSummary => {
   }
   const employees: EmployeeStat[] = [...byEmployee.entries()]
     .map(([name, list]) => {
-      const lateList = list.filter((r) => r.bookingStatus === 'fuera_de_tiempo');
-      const delaySum = lateList.reduce((s, r) => s + r.delayMinutes, 0);
+      const late = list.filter((r) => isNonCompliant(r.bookingStatus));
+      const delaySum = late.reduce((s, r) => s + r.delayMinutes, 0);
+      const empCounts = countStatuses(list);
       return {
         name,
         total: list.length,
-        late: lateList.length,
-        latePct: round1((lateList.length / list.length) * 100),
-        avgDelay: lateList.length ? Math.round(delaySum / lateList.length) : 0,
+        counts: empCounts,
+        nonCompliant: late.length,
+        compliancePct: pct(empCounts.anticipada + empCounts.a_tiempo, list.length),
+        avgDelay: late.length ? Math.round(delaySum / late.length) : 0,
       };
     })
     .sort((a, b) => b.total - a.total);
-  return { total, late, onTime: total - late, latePct, onTimePct: total ? round1(100 - latePct) : 0, employees };
+  return {
+    total,
+    counts,
+    pcts,
+    compliant,
+    compliancePct: pct(compliant, total),
+    nonCompliant,
+    nonCompliantPct: pct(nonCompliant, total),
+    employees,
+  };
 };
 
 const csvSafe = (value: string | number) => {

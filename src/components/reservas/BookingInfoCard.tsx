@@ -1,4 +1,12 @@
-import { BookingRecord, formatCreated, NO_EMPLOYEE_LABEL, scheduledText } from './bookingControl';
+import {
+  BOOKING_STATUS_LABEL,
+  BOOKING_STATUS_STYLE,
+  BookingRecord,
+  formatCreated,
+  isNonCompliant,
+  NO_EMPLOYEE_LABEL,
+  scheduledText,
+} from './bookingControl';
 import { formatClock, formatDateTime } from './reservasUtils';
 import { CourtSession } from '../../lib/supabase';
 
@@ -17,7 +25,7 @@ const Row = ({ label, value }: { label: string; value: string }) => (
 );
 
 export default function BookingInfoCard({ record, opened }: BookingInfoCardProps) {
-  const late = record.bookingStatus === 'fuera_de_tiempo';
+  const late = isNonCompliant(record.bookingStatus);
   const openingText =
     opened === undefined
       ? null
@@ -28,11 +36,9 @@ export default function BookingInfoCard({ record, opened }: BookingInfoCardProps
   return (
     <div className="space-y-2">
       <span
-        className={`inline-block rounded-md px-2 py-1 text-[11px] font-black tracking-wide text-white ${
-          late ? 'bg-orange-600' : 'bg-emerald-600'
-        }`}
+        className={`inline-block rounded-md px-2 py-1 text-[11px] font-black tracking-wide text-white ${BOOKING_STATUS_STYLE[record.bookingStatus].badge}`}
       >
-        {late ? 'FUERA DE TIEMPO' : 'A TIEMPO'}
+        {BOOKING_STATUS_LABEL[record.bookingStatus].toUpperCase()}
       </span>
       <dl>
         <Row label="Horario previsto al cargar" value={scheduledText(record)} />

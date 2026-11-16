@@ -3,9 +3,12 @@ import { ChevronDown, ChevronRight, Download } from 'lucide-react';
 import { CourtReservationHistory, CourtSession } from '../../lib/supabase';
 import BookingPeriodPicker from './BookingPeriodPicker';
 import {
+  BOOKING_STATUS_LABEL,
+  BOOKING_STATUS_STYLE,
   BookingRecord,
   DateRange,
   downloadCsv,
+  isNonCompliant,
   fetchBookingRecords,
   fetchOpenings,
   fetchScheduleChanges,
@@ -28,7 +31,7 @@ const employeeOf = (name: string) => name.trim() || NO_EMPLOYEE_LABEL;
 
 const statusLabel = (r: BookingRecord) => {
   if (r.cancelled) return 'CANCELADA';
-  return r.bookingStatus === 'fuera_de_tiempo' ? 'FUERA DE TIEMPO' : 'A TIEMPO';
+  return BOOKING_STATUS_LABEL[r.bookingStatus].toUpperCase();
 };
 
 const typeLabel = (r: BookingRecord) => (r.source === 'jugado' ? 'Turno jugado' : 'Reserva');
@@ -189,7 +192,7 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
                 {filtered.map((r) => {
                   const opened = openings.get(r.id);
                   const changeList = changes.get(r.id) ?? [];
-                  const isLate = r.bookingStatus === 'fuera_de_tiempo' && !r.cancelled;
+                  const isLate = isNonCompliant(r.bookingStatus) && !r.cancelled;
                   const isOpen = expanded === r.id;
                   return (
                     <Fragment key={`${r.source}-${r.id}`}>
@@ -204,11 +207,7 @@ export default function BookingHistory({ refreshKey }: BookingHistoryProps) {
                         <td className="px-4 py-3">
                           <span
                             className={`inline-block rounded-md px-2 py-1 text-[11px] font-black tracking-wide whitespace-nowrap ${
-                              statusLabel(r) === 'FUERA DE TIEMPO'
-                                ? 'bg-orange-600 text-white'
-                                : statusLabel(r) === 'CANCELADA'
-                                  ? 'bg-slate-200 text-slate-700'
-                                  : 'bg-emerald-600 text-white'
+                              r.cancelled ? 'bg-slate-200 text-slate-700' : `${BOOKING_STATUS_STYLE[r.bookingStatus].badge} text-white`
                             }`}
                           >
                             {statusLabel(r)}

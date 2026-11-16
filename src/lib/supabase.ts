@@ -148,7 +148,7 @@ export interface CourtReservation {
   created_by: string;
   created_at: string;
   booking_scheduled_at: string | null;
-  booking_status: 'a_tiempo' | 'fuera_de_tiempo' | null;
+  booking_status: 'anticipada' | 'a_tiempo' | 'carga_tardia' | 'carga_fuera_de_fecha' | null;
   booking_delay_minutes: number | null;
 }
 
@@ -192,7 +192,7 @@ export interface CourtSession {
   professor_name: string;
   created_at: string;
   booking_scheduled_at: string | null;
-  booking_status: 'a_tiempo' | 'fuera_de_tiempo' | null;
+  booking_status: 'anticipada' | 'a_tiempo' | 'carga_tardia' | 'carga_fuera_de_fecha' | null;
   booking_delay_minutes: number | null;
 }
 
