@@ -394,6 +394,9 @@ export default function Reportes() {
       .sort((a, b) => b.total - a.total);
   }, [selectedProducts, productStats]);
 
+  const visibleMethods =
+    selectedMethods.length > 0 ? selectedMethods : PAYMENT_METHODS.map((m) => m.key);
+
   const activeTotals = useMemo(() => {
     return activeProductStats.reduce(
       (acc, s) => {
@@ -422,9 +425,6 @@ export default function Reportes() {
       prev.includes(key) ? prev.filter((m) => m !== key) : [...prev, key]
     );
   };
-
-  const visibleMethods =
-    selectedMethods.length > 0 ? selectedMethods : PAYMENT_METHODS.map((m) => m.key);
 
   const dailySummary: DailySummaryRow[] = useMemo(() => {
     const map = new Map<string, Omit<DailySummaryRow, 'date'>>();
