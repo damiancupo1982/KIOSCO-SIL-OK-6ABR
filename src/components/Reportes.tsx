@@ -176,6 +176,91 @@ export default function Reportes() {
     return { efectivo, transferencia, qr, expensa };
   };
 
+  // Asigna cada pago de la venta a los artículos que cubre, en el orden en que
+  // fueron cargados: un pago de $5500 en expensas dentro de una venta con
+  // INVITADO + Luz se atribuye a la Luz, no repartido entre ambos.
+  const allocateSalePayments = (sale: any) => {
+    const items = Array.isArray(sale.items) ? sale.items : [];
+    const alloc = items.map(() => ({ efectivo: 0, transferencia: 0, qr: 0, expensa: 0 }));
+
+    let payments: { amount: number; method: string }[] = [];
+    if (sale.payments && Array.isArray(sale.payments) && sale.payments.length > 0) {
+      payments = sale.payments.map((p: any) => ({
+        amount: Number(p.amount) || 0,
+        method: String(p.method || '').toLowerCase(),
+      }));
+    } else {
+      const related = cashTransactions.filter(
+        (tx) =>
+          tx.type === 'income' &&
+          tx.category === 'venta' &&
+          typeof tx.description === 'string' &&
+          tx.description.startsWith(`Venta ${sale.sale_number}`)
+      );
+      payments = related.map((tx) => ({
+        amount: Number(tx.amount) || 0,
+        method: String(tx.payment_method || '').toLowerCase(),
+      }));
+    }
+
+    const isTracked = (m: string) =>
+      m === 'efectivo' || m === 'transferencia' || m === 'qr' || m === 'expensas' || m === 'expensa';
+
+    const addAmount = (i: number, method: string, amount: number) => {
+      const bucket = alloc[i];
+      if (!bucket) return;
+      if (method === 'efectivo') bucket.efectivo += amount;
+      else if (method === 'transferencia') bucket.transferencia += amount;
+      else if (method === 'qr') bucket.qr += amount;
+      else if (method === 'expensas' || method === 'expensa') bucket.expensa += amount;
+    };
+
+    const itemPaid = new Array(items.length).fill(0);
+
+    // Primera pasada: un pago que coincide exactamente con el precio de un
+    // artículo se atribuye directamente a ese artículo.
+    const usedForMatch = new Set<number>();
+    payments.forEach((p) => {
+      if (!isTracked(p.method)) return;
+      for (let i = 0; i < items.length; i++) {
+        const subtotal = Number(items[i]?.subtotal) || 0;
+        if (subtotal > 0.009 && Math.abs(subtotal - p.amount) < 0.01 && !usedForMatch.has(i)) {
+          addAmount(i, p.method, p.amount);
+          itemPaid[i] += p.amount;
+          usedForMatch.add(i);
+          p.amount = 0;
+          break;
+        }
+      }
+    });
+
+    // Segunda pasada: el resto de los pagos se asigna en orden de carga.
+    let idx = 0;
+    let remaining = (Number(items[idx]?.subtotal) || 0) - itemPaid[idx];
+    if (remaining < 0) remaining = 0;
+
+    payments.forEach((p) => {
+      let left = p.amount;
+      while (left > 0.009 && idx < items.length) {
+        if (remaining <= 0.009) {
+          idx += 1;
+          remaining = (Number(items[idx]?.subtotal) || 0) - itemPaid[idx];
+          if (remaining < 0) remaining = 0;
+          continue;
+        }
+        const take = Math.min(left, remaining);
+        if (isTracked(p.method)) addAmount(idx, p.method, take);
+        remaining -= take;
+        left -= take;
+      }
+      if (left > 0.009 && items.length > 0 && isTracked(p.method)) {
+        addAmount(items.length - 1, p.method, left);
+      }
+    });
+
+    return alloc;
+  };
+
   const buildMethodLabel = (breakdown: ReturnType<typeof getPaymentBreakdownForSale>, fallback: string) => {
     const parts: string[] = [];
     if (breakdown.efectivo > 0) parts.push('Efectivo');
@@ -245,10 +330,9 @@ export default function Reportes() {
 
     filteredSales.forEach((sale: any) => {
       const items = Array.isArray(sale.items) ? sale.items : [];
-      const saleTotal = Number(sale.total) || 0;
-      const breakdown = getPaymentBreakdownForSale(sale);
+      const alloc = allocateSalePayments(sale);
 
-      items.forEach((item: any) => {
+      items.forEach((item: any, i: number) => {
         const name = String(item.product_name || '').trim();
         if (!name) return;
 
@@ -256,15 +340,14 @@ export default function Reportes() {
           map.get(name) ||
           { name, units: 0, total: 0, efectivo: 0, transferencia: 0, qr: 0, expensa: 0 };
 
-        const subtotal = Number(item.subtotal) || 0;
-        const share = saleTotal > 0 ? subtotal / saleTotal : 0;
+        const a = alloc[i] || { efectivo: 0, transferencia: 0, qr: 0, expensa: 0 };
 
         stat.units += Number(item.quantity) || 0;
-        stat.total += subtotal;
-        stat.efectivo += breakdown.efectivo * share;
-        stat.transferencia += breakdown.transferencia * share;
-        stat.qr += breakdown.qr * share;
-        stat.expensa += breakdown.expensa * share;
+        stat.total += Number(item.subtotal) || 0;
+        stat.efectivo += a.efectivo;
+        stat.transferencia += a.transferencia;
+        stat.qr += a.qr;
+        stat.expensa += a.expensa;
 
         map.set(name, stat);
       });
@@ -452,6 +535,16 @@ export default function Reportes() {
 
       const breakdown = getPaymentBreakdownForSale(sale);
       const metodoLabel = buildMethodLabel(breakdown, (sale as any).payment_method);
+      const alloc = allocateSalePayments(sale);
+
+      const itemMethodLabel = (a: { efectivo: number; transferencia: number; qr: number; expensa: number }) => {
+        const parts: string[] = [];
+        if (a.efectivo > 0) parts.push('Efectivo');
+        if (a.transferencia > 0) parts.push('Transferencia');
+        if (a.qr > 0) parts.push('QR');
+        if (a.expensa > 0) parts.push('Expensa');
+        return parts.join(' + ');
+      };
 
       if (items.length === 0) {
         sortedRows.push({ sortTime, columns: [
@@ -476,7 +569,7 @@ export default function Reportes() {
         ]});
       } else {
         items.forEach((item: any, index: number) => {
-          const isFirst = index === 0;
+          const a = alloc[index] || { efectivo: 0, transferencia: 0, qr: 0, expensa: 0 };
 
           sortedRows.push({ sortTime: sortTime - index, columns: [
             formatDate((sale as any).created_at),
@@ -491,12 +584,12 @@ export default function Reportes() {
             item.quantity,
             formatNumber(Number(item.price)),
             formatNumber(Number(item.subtotal)),
-            isFirst ? formatNumber(Number((sale as any).total)) : '',
-            isFirst ? metodoLabel : '',
-            isFirst ? formatNumber(breakdown.efectivo) : '',
-            isFirst ? formatNumber(breakdown.transferencia) : '',
-            isFirst ? formatNumber(breakdown.qr) : '',
-            isFirst ? formatNumber(breakdown.expensa) : '',
+            index === 0 ? formatNumber(Number((sale as any).total)) : '',
+            itemMethodLabel(a),
+            formatNumber(a.efectivo),
+            formatNumber(a.transferencia),
+            formatNumber(a.qr),
+            formatNumber(a.expensa),
           ]});
         });
       }
