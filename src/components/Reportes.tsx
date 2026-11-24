@@ -319,6 +319,8 @@ export default function Reportes() {
     name: string;
     units: number;
     total: number;
+    unitsByMethod: Record<string, number>;
+    totalByMethod: Record<string, number>;
     efectivo: number;
     transferencia: number;
     qr: number;
@@ -338,16 +340,44 @@ export default function Reportes() {
 
         const stat =
           map.get(name) ||
-          { name, units: 0, total: 0, efectivo: 0, transferencia: 0, qr: 0, expensa: 0 };
+          {
+            name,
+            units: 0,
+            total: 0,
+            unitsByMethod: { efectivo: 0, transferencia: 0, qr: 0, expensa: 0 },
+            totalByMethod: { efectivo: 0, transferencia: 0, qr: 0, expensa: 0 },
+            efectivo: 0,
+            transferencia: 0,
+            qr: 0,
+            expensa: 0,
+          };
 
         const a = alloc[i] || { efectivo: 0, transferencia: 0, qr: 0, expensa: 0 };
+        const qty = Number(item.quantity) || 0;
 
-        stat.units += Number(item.quantity) || 0;
+        stat.units += qty;
         stat.total += Number(item.subtotal) || 0;
         stat.efectivo += a.efectivo;
         stat.transferencia += a.transferencia;
         stat.qr += a.qr;
         stat.expensa += a.expensa;
+
+        // La proporción de cada método sobre el subtotal define cuántas
+        // unidades del artículo se pagaron con cada método.
+        const subtotal = Number(item.subtotal) || 0;
+        const methodAmounts: Record<string, number> = {
+          efectivo: a.efectivo,
+          transferencia: a.transferencia,
+          qr: a.qr,
+          expensa: a.expensa,
+        };
+
+        (Object.keys(methodAmounts) as Array<keyof typeof methodAmounts>).forEach((m) => {
+          const amount = methodAmounts[m];
+          if (amount <= 0 || subtotal <= 0) return;
+          stat.unitsByMethod[m] += qty * (amount / subtotal);
+          stat.totalByMethod[m] += amount;
+        });
 
         map.set(name, stat);
       });
@@ -367,8 +397,10 @@ export default function Reportes() {
   const activeTotals = useMemo(() => {
     return activeProductStats.reduce(
       (acc, s) => {
-        acc.units += s.units;
-        acc.total += s.total;
+        const units = visibleMethods.reduce((sum, m) => sum + (s.unitsByMethod[m] || 0), 0);
+        const total = visibleMethods.reduce((sum, m) => sum + (s.totalByMethod[m] || 0), 0);
+        acc.units += units;
+        acc.total += total;
         acc.efectivo += s.efectivo;
         acc.transferencia += s.transferencia;
         acc.qr += s.qr;
@@ -377,7 +409,7 @@ export default function Reportes() {
       },
       { units: 0, total: 0, efectivo: 0, transferencia: 0, qr: 0, expensa: 0 }
     );
-  }, [activeProductStats]);
+  }, [activeProductStats, visibleMethods]);
 
   const toggleProduct = (name: string) => {
     setSelectedProducts((prev) =>
@@ -1255,21 +1287,29 @@ export default function Reportes() {
                         </tr>
                       </thead>
                       <tbody className="divide-y">
-                        {activeProductStats.map((s) => (
-                          <tr key={s.name} className="hover:bg-slate-50">
-                            <td className="px-4 py-2 text-sm font-medium text-slate-800">{s.name}</td>
-                            <td className="px-4 py-2 text-sm text-right text-slate-700">{s.units}</td>
-                            <td className="px-4 py-2 text-sm text-right font-semibold text-emerald-700">${s.total.toFixed(2)}</td>
-                            {visibleMethods.map((key) => (
-                              <td key={key} className="px-4 py-2 text-sm text-right text-slate-600">
-                                ${(s as ProductStat)[key as keyof ProductStat] as number === 0 ? '-' : `${Number((s as ProductStat)[key as keyof ProductStat]).toFixed(2)}`}
+                        {activeProductStats.map((s) => {
+                          const rowUnits = visibleMethods.reduce((sum, m) => sum + (s.unitsByMethod[m] || 0), 0);
+                          const rowTotal = visibleMethods.reduce((sum, m) => sum + (s.totalByMethod[m] || 0), 0);
+                          return (
+                            <tr key={s.name} className="hover:bg-slate-50">
+                              <td className="px-4 py-2 text-sm font-medium text-slate-800">{s.name}</td>
+                              <td className="px-4 py-2 text-sm text-right text-slate-700">
+                                {Math.round(rowUnits) !== rowUnits ? rowUnits.toFixed(1) : rowUnits}
                               </td>
-                            ))}
-                          </tr>
-                        ))}
+                              <td className="px-4 py-2 text-sm text-right font-semibold text-emerald-700">${rowTotal.toFixed(2)}</td>
+                              {visibleMethods.map((key) => (
+                                <td key={key} className="px-4 py-2 text-sm text-right text-slate-600">
+                                  {s.totalByMethod[key] ? `${(s.totalByMethod[key] || 0).toFixed(2)}` : '-'}
+                                </td>
+                              ))}
+                            </tr>
+                          );
+                        })}
                         <tr className="bg-yellow-50">
                           <td className="px-4 py-2 text-sm font-bold">TOTAL</td>
-                          <td className="px-4 py-2 text-sm text-right font-bold">{activeTotals.units}</td>
+                          <td className="px-4 py-2 text-sm text-right font-bold">
+                            {Math.round(activeTotals.units) !== activeTotals.units ? activeTotals.units.toFixed(1) : activeTotals.units}
+                          </td>
                           <td className="px-4 py-2 text-sm text-right font-bold">${activeTotals.total.toFixed(2)}</td>
                           {visibleMethods.map((key) => (
                             <td key={key} className="px-4 py-2 text-sm text-right font-bold">
