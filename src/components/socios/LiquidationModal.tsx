@@ -71,9 +71,9 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
 
   const exportExcel = () => {
     const silSheet = XLSX.utils.aoa_to_sheet([
-      ['Barrio', 'Lote', 'Monto Bruto', 'Descuento Tenis', 'Monto Final'],
-      ...silRows.map(r => [r.barrio, r.lot, r.calc.total_bruto, r.calc.total_descuento, r.calc.total_final]),
-      ['', 'TOTAL SIL', silTotals.bruto, silTotals.descuento, silTotals.final],
+      ['Barrio', 'Lote', 'Carnets asociados', 'Monto Bruto', 'Descuento Tenis', 'Monto Final'],
+      ...silRows.map(r => [r.barrio, r.lot, r.calc.details.length, r.calc.total_bruto, r.calc.total_descuento, r.calc.total_final]),
+      ['', 'TOTAL SIL', '', silTotals.bruto, silTotals.descuento, silTotals.final],
     ]);
     const extSheet = XLSX.utils.aoa_to_sheet([
       ['ID externo', 'Nombre y apellido', 'DNI', 'Tipo de carnet', 'Valor', 'Estado', 'Fecha de alta'],
@@ -92,7 +92,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
   const printLiquidation = () => {
     const esc = (v: string) => v.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
     const silHtml = silRows.map(r =>
-      `<tr><td>${esc(r.barrio)}</td><td>${esc(r.lot)}</td><td>${money(r.calc.total_bruto)}</td><td>${money(r.calc.total_descuento)}</td><td>${money(r.calc.total_final)}</td></tr>`
+      `<tr><td>${esc(r.barrio)}</td><td>${esc(r.lot)}</td><td>${r.calc.details.length}</td><td>${money(r.calc.total_bruto)}</td><td>${money(r.calc.total_descuento)}</td><td>${money(r.calc.total_final)}</td></tr>`
     ).join('');
     const extHtml = extRows.map(r =>
       `<tr><td>${esc(r.socio.external_id || '')}</td><td>${esc(socioFullName(r.socio))}</td><td>${esc(r.socio.dni)}</td><td>${externoCarnet(r.socio)}</td><td>${money(r.calc.total_final)}</td><td>${STATUS_LABEL[r.socio.carnet_status]}</td><td>${fmtDate(r.socio.created_at)}</td></tr>`
@@ -100,7 +100,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
     const style = 'body{font-family:sans-serif;padding:20px}table{width:100%;border-collapse:collapse;margin:12px 0 28px}th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:12px}th{background:#f1f5f9}tr.total td{font-weight:bold;background:#fef9c3}';
     const html = `<html><head><title>Liquidacion</title><style>${style}</style></head><body>
       <h2>Liquidacion de Carnets - Socios SIL</h2>
-      <table><thead><tr><th>Barrio</th><th>Lote</th><th>Bruto</th><th>Desc. Tenis</th><th>Final</th></tr></thead><tbody>${silHtml}<tr class="total"><td></td><td>TOTAL SIL</td><td>${money(silTotals.bruto)}</td><td>${money(silTotals.descuento)}</td><td>${money(silTotals.final)}</td></tr></tbody></table>
+      <table><thead><tr><th>Barrio</th><th>Lote</th><th>Carnets asociados</th><th>Bruto</th><th>Desc. Tenis</th><th>Final</th></tr></thead><tbody>${silHtml}<tr class="total"><td></td><td>TOTAL SIL</td><td></td><td>${money(silTotals.bruto)}</td><td>${money(silTotals.descuento)}</td><td>${money(silTotals.final)}</td></tr></tbody></table>
       <h2>Socios Externos</h2>
       <table><thead><tr><th>ID externo</th><th>Nombre y apellido</th><th>DNI</th><th>Tipo de carnet</th><th>Valor</th><th>Estado</th><th>Fecha de alta</th></tr></thead><tbody>${extHtml}<tr class="total"><td></td><td>TOTAL EXTERNOS</td><td></td><td></td><td>${money(extTotal)}</td><td></td><td></td></tr></tbody></table>
     </body></html>`;
@@ -111,7 +111,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
   const shareLiquidation = () => {
     const lines = [
       'LIQUIDACION DE CARNETS - SOCIOS SIL', '---',
-      ...silRows.map(r => `${r.barrio} | Lote ${r.lot} | Bruto: ${money(r.calc.total_bruto)} | Desc: ${money(r.calc.total_descuento)} | Final: ${money(r.calc.total_final)}`),
+      ...silRows.map(r => `${r.barrio} | Lote ${r.lot} | Carnets asociados: ${r.calc.details.length} | Bruto: ${money(r.calc.total_bruto)} | Desc: ${money(r.calc.total_descuento)} | Final: ${money(r.calc.total_final)}`),
       `--- TOTAL SIL: ${money(silTotals.final)}`, '',
       'SOCIOS EXTERNOS', '---',
       ...extRows.map(r => `${r.socio.external_id} | ${socioFullName(r.socio)} | ${STATUS_LABEL[r.socio.carnet_status]} | ${money(r.calc.total_final)}`),
@@ -167,6 +167,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
                 <tr className="border-b border-slate-200">
                   <th className={`text-left ${th}`}>Barrio</th>
                   <th className={`text-left ${th}`}>Lote</th>
+                  <th className={`text-center ${th}`}>Carnets asociados</th>
                   <th className={`text-right ${th}`}>Bruto</th>
                   <th className={`text-right ${th}`}>Desc. Tenis</th>
                   <th className={`text-right ${th}`}>Final</th>
@@ -181,6 +182,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
                     <tr key={lotKey} className="border-b border-slate-100 hover:bg-slate-50">
                       <td className="py-2 px-3">{r.barrio}</td>
                       <td className="py-2 px-3">{r.lot}</td>
+                      <td className="py-2 px-3 text-center font-medium">{r.calc.details.length}</td>
                       <td className="py-2 px-3 text-right">{money(r.calc.total_bruto)}</td>
                       <td className="py-2 px-3 text-right text-emerald-600">{r.calc.total_descuento > 0 ? `-${money(r.calc.total_descuento)}` : '-'}</td>
                       <td className="py-2 px-3 text-right font-medium">{money(r.calc.total_final)}</td>
@@ -194,6 +196,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
                           {d.socio_name} <span className="text-slate-400">({categoryLabel(d.category)})</span>
                           {d.tiene_tenis && <span className="ml-1 text-cyan-600">TENIS</span>}
                         </td>
+                        <td></td>
                         <td className="py-1 px-3 text-right text-xs">{money(d.base_price)}</td>
                         <td className="py-1 px-3 text-right text-xs text-emerald-600">{d.discount > 0 ? `-${money(d.discount)}` : '-'}</td>
                         <td className="py-1 px-3 text-right text-xs font-medium">{money(d.final_price)}</td>
@@ -206,6 +209,7 @@ export default function LiquidationModal({ socios, barrios, prices, onClose, onS
                   <tr className="bg-amber-50 font-bold">
                     <td className="py-2 px-3"></td>
                     <td className="py-2 px-3">TOTAL SIL</td>
+                    <td className="py-2 px-3"></td>
                     <td className="py-2 px-3 text-right">{money(silTotals.bruto)}</td>
                     <td className="py-2 px-3 text-right text-emerald-700">{silTotals.descuento > 0 ? `-${money(silTotals.descuento)}` : '-'}</td>
                     <td className="py-2 px-3 text-right text-amber-700">{money(silTotals.final)}</td>
