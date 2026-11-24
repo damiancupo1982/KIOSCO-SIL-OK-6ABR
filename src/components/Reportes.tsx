@@ -6,6 +6,7 @@ import {
   Download,
   Search,
   Table,
+  Check,
 } from 'lucide-react';
 
 type DailySummaryRow = {
@@ -47,6 +48,8 @@ export default function Reportes() {
   const [searchProduct, setSearchProduct] = useState('');
   const [searchLot, setSearchLot] = useState('');
   const [showResumen, setShowResumen] = useState(false);
+  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
 
   useEffect(() => {
     loadData();
@@ -207,6 +210,106 @@ export default function Reportes() {
       return customerMatch && lotMatch && productMatch;
     });
   }, [sales, searchCustomer, searchLot, searchProduct]);
+
+  const PAYMENT_METHODS = [
+    { key: 'efectivo', label: 'Efectivo' },
+    { key: 'transferencia', label: 'Transferencia' },
+    { key: 'qr', label: 'QR' },
+    { key: 'expensa', label: 'Expensa' },
+  ];
+
+  const availableProducts = useMemo(() => {
+    const names = new Set<string>();
+    filteredSales.forEach((sale: any) => {
+      const items = Array.isArray(sale.items) ? sale.items : [];
+      items.forEach((item: any) => {
+        const name = String(item.product_name || '').trim();
+        if (name) names.add(name);
+      });
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b, 'es'));
+  }, [filteredSales]);
+
+  type ProductStat = {
+    name: string;
+    units: number;
+    total: number;
+    efectivo: number;
+    transferencia: number;
+    qr: number;
+    expensa: number;
+  };
+
+  const productStats = useMemo(() => {
+    const map = new Map<string, ProductStat>();
+
+    filteredSales.forEach((sale: any) => {
+      const items = Array.isArray(sale.items) ? sale.items : [];
+      const saleTotal = Number(sale.total) || 0;
+      const breakdown = getPaymentBreakdownForSale(sale);
+
+      items.forEach((item: any) => {
+        const name = String(item.product_name || '').trim();
+        if (!name) return;
+
+        const stat =
+          map.get(name) ||
+          { name, units: 0, total: 0, efectivo: 0, transferencia: 0, qr: 0, expensa: 0 };
+
+        const subtotal = Number(item.subtotal) || 0;
+        const share = saleTotal > 0 ? subtotal / saleTotal : 0;
+
+        stat.units += Number(item.quantity) || 0;
+        stat.total += subtotal;
+        stat.efectivo += breakdown.efectivo * share;
+        stat.transferencia += breakdown.transferencia * share;
+        stat.qr += breakdown.qr * share;
+        stat.expensa += breakdown.expensa * share;
+
+        map.set(name, stat);
+      });
+    });
+
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredSales, cashTransactions]);
+
+  const activeProductStats = useMemo(() => {
+    return selectedProducts
+      .filter((name) => productStats.has(name))
+      .map((name) => productStats.get(name)!)
+      .sort((a, b) => b.total - a.total);
+  }, [selectedProducts, productStats]);
+
+  const activeTotals = useMemo(() => {
+    return activeProductStats.reduce(
+      (acc, s) => {
+        acc.units += s.units;
+        acc.total += s.total;
+        acc.efectivo += s.efectivo;
+        acc.transferencia += s.transferencia;
+        acc.qr += s.qr;
+        acc.expensa += s.expensa;
+        return acc;
+      },
+      { units: 0, total: 0, efectivo: 0, transferencia: 0, qr: 0, expensa: 0 }
+    );
+  }, [activeProductStats]);
+
+  const toggleProduct = (name: string) => {
+    setSelectedProducts((prev) =>
+      prev.includes(name) ? prev.filter((p) => p !== name) : [...prev, name]
+    );
+  };
+
+  const toggleMethod = (key: string) => {
+    setSelectedMethods((prev) =>
+      prev.includes(key) ? prev.filter((m) => m !== key) : [...prev, key]
+    );
+  };
+
+  const visibleMethods =
+    selectedMethods.length > 0 ? selectedMethods : PAYMENT_METHODS.map((m) => m.key);
 
   const dailySummary: DailySummaryRow[] = useMemo(() => {
     const map = new Map<string, Omit<DailySummaryRow, 'date'>>();
@@ -963,6 +1066,130 @@ export default function Reportes() {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-lg p-6">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+              <h4 className="text-lg font-bold text-slate-800">Análisis por Artículo</h4>
+              {availableProducts.length > 0 && (
+                <div className="flex gap-2">
+                  {selectedProducts.length < availableProducts.length && (
+                    <button
+                      onClick={() => setSelectedProducts(availableProducts)}
+                      className="px-3 py-1.5 text-sm font-medium bg-orange-50 text-orange-700 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors"
+                    >
+                      Marcar todo
+                    </button>
+                  )}
+                  {selectedProducts.length > 0 && (
+                    <button
+                      onClick={() => setSelectedProducts([])}
+                      className="px-3 py-1.5 text-sm font-medium bg-slate-50 text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors"
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {availableProducts.length === 0 ? (
+              <p className="text-sm text-slate-500">No hay artículos en el período seleccionado.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {availableProducts.map((name) => {
+                    const checked = selectedProducts.includes(name);
+                    return (
+                      <button
+                        key={name}
+                        onClick={() => toggleProduct(name)}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium border-2 flex items-center gap-1.5 transition-all ${
+                          checked
+                            ? 'bg-orange-500 border-orange-500 text-white shadow-md'
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-orange-300 hover:text-orange-600'
+                        }`}
+                      >
+                        {checked && <Check size={14} strokeWidth={3} />}
+                        {name}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  <span className="text-sm font-medium text-slate-500">Métodos de pago:</span>
+                  {PAYMENT_METHODS.map((m) => {
+                    const checked = selectedMethods.includes(m.key);
+                    return (
+                      <button
+                        key={m.key}
+                        onClick={() => toggleMethod(m.key)}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium border-2 flex items-center gap-1.5 transition-all ${
+                          checked
+                            ? 'bg-blue-500 border-blue-500 text-white shadow-md'
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:text-blue-600'
+                        }`}
+                      >
+                        {checked && <Check size={14} strokeWidth={3} />}
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                  {selectedMethods.length > 0 && (
+                    <button
+                      onClick={() => setSelectedMethods([])}
+                      className="text-sm text-slate-400 hover:text-slate-600 underline"
+                    >
+                      Mostrar todos
+                    </button>
+                  )}
+                </div>
+
+                {activeProductStats.length > 0 && (
+                  <div className="overflow-x-auto border rounded-lg">
+                    <table className="w-full">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Artículo</th>
+                          <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Unidades</th>
+                          <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">Total Facturado</th>
+                          {visibleMethods.map((key) => (
+                            <th key={key} className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase">
+                              {PAYMENT_METHODS.find((m) => m.key === key)?.label}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {activeProductStats.map((s) => (
+                          <tr key={s.name} className="hover:bg-slate-50">
+                            <td className="px-4 py-2 text-sm font-medium text-slate-800">{s.name}</td>
+                            <td className="px-4 py-2 text-sm text-right text-slate-700">{s.units}</td>
+                            <td className="px-4 py-2 text-sm text-right font-semibold text-emerald-700">${s.total.toFixed(2)}</td>
+                            {visibleMethods.map((key) => (
+                              <td key={key} className="px-4 py-2 text-sm text-right text-slate-600">
+                                ${(s as ProductStat)[key as keyof ProductStat] as number === 0 ? '-' : `${Number((s as ProductStat)[key as keyof ProductStat]).toFixed(2)}`}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        <tr className="bg-yellow-50">
+                          <td className="px-4 py-2 text-sm font-bold">TOTAL</td>
+                          <td className="px-4 py-2 text-sm text-right font-bold">{activeTotals.units}</td>
+                          <td className="px-4 py-2 text-sm text-right font-bold">${activeTotals.total.toFixed(2)}</td>
+                          {visibleMethods.map((key) => (
+                            <td key={key} className="px-4 py-2 text-sm text-right font-bold">
+                              ${Number(activeTotals[key as keyof typeof activeTotals]).toFixed(2)}
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className="bg-white rounded-xl shadow-lg overflow-hidden">
